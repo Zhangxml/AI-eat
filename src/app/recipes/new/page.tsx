@@ -9,11 +9,6 @@ import RecipeForm from '@/components/RecipeForm'
 import { apiFetch } from '@/lib/api-fetch'
 import type { DraftRecipe, Recipe } from '@/lib/recipe-types'
 
-// POST /api/recipes 的成功响应契约
-interface CreateResponse {
-  recipe: Recipe
-}
-
 export default function NewRecipePage() {
   const router = useRouter()
 
@@ -25,8 +20,9 @@ export default function NewRecipePage() {
       body: JSON.stringify(draft),
     })
     if (res.ok) {
-      const data = (await res.json()) as CreateResponse
-      router.push(`/recipes/${data.recipe.id}`)
+      // 201 响应为裸 Recipe（route.ts: Response.json(recipe)），无 { recipe } 包裹
+      const data = (await res.json()) as Recipe
+      router.push(`/recipes/${data.id}`)
     }
     // 失败时 Response 原样交还 RecipeForm 统一 alert 错误文案
     return res
