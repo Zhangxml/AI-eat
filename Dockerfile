@@ -26,15 +26,16 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
 # data 目录不 COPY 进镜像：运行时由 volume 挂载（./data:/app/data），保持数据与镜像解耦
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/standalone ./
 # standalone 不含静态资源，需手动补齐（Next 官方标准做法，本机等效验收确认）：
 # 页面 JS/CSS chunk 必须放 .next/static（运行时按 /_next/static/* 从该目录读取，
 # 放错为根级 static/ 会全量 404 导致页面白屏）；public 按原始相对路径放置
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 
-# 非 root 运行（node:20-alpine 自带 nextjs 用户；data 卷挂载后容器内 uid 可写宿主机目录）
-USER nextjs
+# 非 root 运行：node:20-alpine 只内置 node 用户（uid/gid 1000，无 nextjs 用户）；
+# uid 1000 与典型宿主机首用户一致，bind mount ./data（宿主机首用户所有）对容器内 node 可写
+USER node
 
 EXPOSE 3000
 
