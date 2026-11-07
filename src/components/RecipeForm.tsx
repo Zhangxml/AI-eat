@@ -51,6 +51,11 @@ interface AiEstimateResponse {
   recipe?: Recipe
 }
 
+// 行内次级描边按钮（统一规格）：紧凑高度 py-1.5（桌面与标签行协调，移动端有周边大按钮兜底触摸体验）；
+// 全站同类按钮共用此串：RecipeForm（AI 生成/AI 估算营养）、详情页（编辑/重试）、设置页（开始导入）
+const compactBtn =
+  'shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500'
+
 export default function RecipeForm({
   initial,
   onSubmit,
@@ -352,7 +357,7 @@ export default function RecipeForm({
             onClick={handleGenerate}
             disabled={generating || submitting || estimating || name.trim() === ''}
             aria-label="AI 生成菜谱"
-            className="shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
+            className={compactBtn}
           >
             {generating ? '生成中…' : 'AI 生成'}
           </button>
@@ -535,7 +540,7 @@ export default function RecipeForm({
             onClick={handleEstimate}
             disabled={aiDisabled}
             aria-label="AI 估算营养"
-            className="min-h-[44px] shrink-0 rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
+            className={compactBtn}
           >
             {estimating ? '估算中…' : 'AI 估算营养'}
           </button>

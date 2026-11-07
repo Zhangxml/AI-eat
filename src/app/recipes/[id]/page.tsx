@@ -146,13 +146,13 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           <button
             type="button"
             onClick={() => void loadRecipe()}
-            className="flex min-h-[44px] items-center rounded-lg border border-neutral-900 px-4 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800"
+            className="shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800"
           >
             重试
           </button>
           <Link
             href="/recipes"
-            className="flex min-h-[44px] items-center rounded-lg border border-neutral-300 px-4 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
+            className="shrink-0 rounded-lg border border-neutral-300 px-3 py-1.5 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
           >
             返回菜谱库
           </Link>
@@ -212,7 +212,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           <button
             type="button"
             onClick={() => setMode('edit')}
-            className="flex min-h-[44px] items-center rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800"
+            className="shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800"
           >
             编辑
           </button>
@@ -220,7 +220,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
             type="button"
             onClick={() => void handleDelete()}
             disabled={deleting}
-            className="flex min-h-[44px] items-center rounded-lg border border-red-200 px-3 text-sm text-red-600 transition-colors active:bg-red-50 disabled:opacity-60 dark:border-red-900 dark:text-red-400 dark:active:bg-red-950"
+            className="shrink-0 rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 transition-colors active:bg-red-50 disabled:opacity-60 dark:border-red-900 dark:text-red-400 dark:active:bg-red-950"
           >
             {deleting ? '删除中…' : '删除'}
           </button>
