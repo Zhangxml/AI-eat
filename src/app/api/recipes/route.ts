@@ -2,6 +2,7 @@
 import { listRecipes, createRecipe, filterRecipes } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe } from '@/lib/recipe-types'
+import { requireAuth } from '@/lib/auth'
 
 // 读取 JSON body 并用 zod 校验为草稿；解析失败或校验失败返回 null
 async function parseDraft(req: Request): Promise<DraftRecipe | null> {
@@ -16,6 +17,8 @@ async function parseDraft(req: Request): Promise<DraftRecipe | null> {
 
 // GET /api/recipes?q=&tag= → 200 { recipes, invalidFiles }
 export async function GET(req: Request) {
+  const denied = requireAuth(req)
+  if (denied) return denied
   const url = new URL(req.url)
   const q = url.searchParams.get('q') ?? undefined
   const tag = url.searchParams.get('tag') ?? undefined
@@ -31,6 +34,8 @@ export async function GET(req: Request) {
 
 // POST /api/recipes（body: DraftRecipe）→ 201 Recipe | 400 { error }
 export async function POST(req: Request) {
+  const denied = requireAuth(req)
+  if (denied) return denied
   const draft = await parseDraft(req)
   if (!draft) {
     return Response.json({ error: '请求体不是合法的菜谱草稿' }, { status: 400 })

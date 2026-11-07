@@ -2,6 +2,7 @@
 import { getRecipe, updateRecipe, deleteRecipe } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe } from '@/lib/recipe-types'
+import { requireAuth } from '@/lib/auth'
 
 // 读取 JSON body 并用 zod 校验为草稿；解析失败或校验失败返回 null
 async function parseDraft(req: Request): Promise<DraftRecipe | null> {
@@ -16,6 +17,8 @@ async function parseDraft(req: Request): Promise<DraftRecipe | null> {
 
 // GET /api/recipes/:id → 200 Recipe | 404 { error }
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const denied = requireAuth(_req)
+  if (denied) return denied
   const { id } = await ctx.params
   const recipe = await getRecipe(id)
   if (!recipe) {
@@ -26,6 +29,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 
 // PUT /api/recipes/:id（body: DraftRecipe）→ 200 Recipe | 400 { error } | 404 { error }
 export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const denied = requireAuth(req)
+  if (denied) return denied
   const { id } = await ctx.params
   const draft = await parseDraft(req)
   if (!draft) {
@@ -40,6 +45,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
 
 // DELETE /api/recipes/:id → 204 无 body | 404 { error }
 export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const denied = requireAuth(_req)
+  if (denied) return denied
   const { id } = await ctx.params
   const deleted = await deleteRecipe(id)
   if (!deleted) {

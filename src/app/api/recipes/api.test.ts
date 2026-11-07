@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { GET as listR, POST as createR } from './route'
 import { GET as getR, PUT as putR, DELETE as delR } from './[id]/route'
+import { issueToken } from '@/lib/auth'
 import type { DraftRecipe } from '@/lib/recipe-types'
 
 // 合法草稿：与 recipe-store.test.ts 保持一致
@@ -110,5 +111,31 @@ describe('菜谱库 REST API', () => {
     const list = await (await listR(new Request('http://x/api/recipes'))).json()
     expect(list.recipes).toHaveLength(1)
     expect(list.invalidFiles).toEqual(['broken.json'])
+  })
+
+  it('启用鉴权后未带会话 → 401；带合法会话 Cookie → 200（守卫前置，未读 body 未触 store）', async () => {
+    const created = await (await createR(json(goodDraft))).json()
+    try {
+      process.env.PASSWORD = 'test-pw'
+      // 无 Cookie：列表/单个/创建/更新/删除一律 401
+      expect((await listR(new Request('http://x/api/recipes'))).status).toBe(401)
+      expect((await getR(new Request('http://x'), ctxOf(created.id))).status).toBe(401)
+      expect((await createR(json(goodDraft))).status).toBe(401)
+      expect((await putR(json(goodDraft), ctxOf(created.id))).status).toBe(401)
+      expect((await delR(new Request('http://x'), ctxOf(created.id))).status).toBe(401)
+      // 401 拦截在前：未消费 body 的请求带着非法 body 也先被守卫拦下（守卫是 handler 首行）
+      expect((await createR(new Request('http://x', { method: 'POST', body: '{oops' }))).status).toBe(401)
+      // 带合法会话：列表 200，能取到既有菜谱
+      const token = issueToken()
+      const ok = await listR(new Request('http://x/api/recipes', { headers: { cookie: `ai-eat-session=${token}` } }))
+      expect(ok.status).toBe(200)
+      const body = await ok.json()
+      expect(body.recipes).toHaveLength(1)
+      expect(body.recipes[0].id).toBe(created.id)
+      // 带会话的删除也走通（守卫放行后正常业务路径）
+      expect((await delR(new Request('http://x', { headers: { cookie: `ai-eat-session=${token}` } }), ctxOf(created.id))).status).toBe(204)
+    } finally {
+      delete process.env.PASSWORD
+    }
   })
 })

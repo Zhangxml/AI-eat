@@ -1,10 +1,14 @@
 // 备份接口单测（Task 15）：GET 导出 / POST 导入，node 环境直接 import route handler 调用
 // 数据目录经 process.env.AI_EAT_DATA_DIR 注入临时目录（store 每次调用时读 env，模块顶层默认值不受影响）
+// Task 16 起本接口受守卫保护：PASSWORD 未设时放行（本文件不带 Cookie 直调）；若设 PASSWORD 须带会话 Cookie
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { GET, POST } from './route'
 import { getRecipe, putRecipe } from '@/lib/recipe-store'
 import type { Recipe } from '@/lib/recipe-types'
+
+// 构造 GET 请求（守卫只读 Cookie 头；PASSWORD 未启用时不带 Cookie 亦可）
+const getReq = () => new Request('http://x/api/backup')
 
 // 合法完整菜谱夹具：与 recipe-store.test.ts / ai 测试同款形状，id 可过 strict schema
 const baseRecipe: Recipe = {
@@ -59,7 +63,7 @@ describe('备份接口 /api/backup', () => {
   it('GET 导出：200 + exportedAt + 全部菜谱 + Content-Disposition 附件头', async () => {
     await putRecipe(baseRecipe)
     await putRecipe(otherRecipe)
-    const res = await GET()
+    const res = await GET(getReq())
     expect(res.status).toBe(200)
     // 附件下载头：attachment + ai-eat-backup-<YYYYMMDD>.json
     expect(res.headers.get('Content-Disposition')).toMatch(
@@ -74,7 +78,7 @@ describe('备份接口 /api/backup', () => {
   })
 
   it('GET 空库导出：recipes 为空数组，头与 exportedAt 仍齐备', async () => {
-    const res = await GET()
+    const res = await GET(getReq())
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Disposition')).toMatch(/^attachment; filename=ai-eat-backup-\d{8}\.json$/)
     const body = await res.json()
@@ -151,7 +155,7 @@ describe('备份接口 /api/backup', () => {
   it('round trip：导出 → 清库 → 导入 → 全量恢复', async () => {
     await putRecipe(baseRecipe)
     await putRecipe(otherRecipe)
-    const exportRes = await GET()
+    const exportRes = await GET(getReq())
     const backupBody = (await exportRes.json()) as { recipes: Recipe[] }
     // 清库
     await fs.rm(dir, { recursive: true, force: true })

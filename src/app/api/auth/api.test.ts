@@ -1,0 +1,88 @@
+// /api/auth 路由单测（Task 16）：POST 登录签发会话 Cookie / GET 查询鉴权开关
+// env 用快照接管 + afterEach 恢复（PASSWORD 影响签发与校验两侧）
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { POST, GET } from './route'
+import { isValidToken, SESSION_COOKIE } from '@/lib/auth'
+
+// 测试局部 env 字面量经 unknown 中转：Next 的 global.d.ts 把 ProcessEnv.NODE_ENV 声明为必填，
+// 直接 as NodeJS.ProcessEnv 因重叠不足被 TS 拒绝（同 ai-client.test.ts 的既有处理）
+const envOf = (vars: Record<string, string>): NodeJS.ProcessEnv => vars as unknown as NodeJS.ProcessEnv
+
+// POST 请求构造：带 JSON body
+const post = (body: unknown, headers: Record<string, string> = {}) =>
+  new Request('http://x/api/auth', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', ...headers },
+  })
+
+// Set-Cookie 值解析：name=值; 属性串 → { value, attrs }
+function parseSetCookie(header: string): { value: string; attrs: string[] } {
+  const segs = header.split(';')
+  const pair = segs[0] ?? ''
+  const eq = pair.indexOf('=')
+  return { value: pair.slice(eq + 1), attrs: segs.slice(1).map(s => s.trim()) }
+}
+
+describe('/api/auth', () => {
+  let envSnapshot: NodeJS.ProcessEnv
+
+  beforeEach(() => {
+    envSnapshot = { ...process.env }
+    process.env.PASSWORD = 'p'
+  })
+
+  afterEach(() => {
+    process.env = envSnapshot
+  })
+
+  it('正确密码 → 200 且 Set-Cookie 含 HttpOnly/Path=/ /SameSite=Lax/Max-Age=2592000，token 可验', async () => {
+    const res = await POST(post({ password: 'p' }))
+    expect(res.status).toBe(200)
+    const setCookie = res.headers.get('set-cookie')
+    expect(setCookie).toBeTruthy()
+    const { value, attrs } = parseSetCookie(setCookie as string)
+    expect(attrs).toEqual(expect.arrayContaining(['HttpOnly', 'Path=/', 'SameSite=Lax', 'Max-Age=2592000']))
+    // 签发的 token 必须能通过守卫的同一密钥校验
+    expect(isValidToken(value, envOf({ PASSWORD: 'p' }))).toBe(true)
+    expect((await res.json())).toEqual({ ok: true })
+  })
+
+  it('纯 HTTP（x-forwarded-proto: http）不带 Secure；HTTPS 代理（首段 https）带 Secure', async () => {
+    // 局域网纯 HTTP：绝不卡死登录（LibreTV 关键坑）
+    const httpRes = await POST(post({ password: 'p' }, { 'x-forwarded-proto': 'http' }))
+    const httpCookie = parseSetCookie(httpRes.headers.get('set-cookie') as string)
+    expect(httpCookie.attrs).not.toContain('Secure')
+    // 反代终止 TLS：x-forwarded-proto 首段 https → Secure
+    const httpsRes = await POST(post({ password: 'p' }, { 'x-forwarded-proto': 'https,http' }))
+    const httpsCookie = parseSetCookie(httpsRes.headers.get('set-cookie') as string)
+    expect(httpsCookie.attrs).toContain('Secure')
+    expect(SESSION_COOKIE).toBe('ai-eat-session')
+  })
+
+  it('错误密码 → 401 { error } 中文', async () => {
+    const res = await POST(post({ password: 'wrong' }))
+    expect(res.status).toBe(401)
+    expect(((await res.json()) as { error: string }).error).toBeTruthy()
+  })
+
+  it('body 非法（非 JSON / 缺 password / password 非字符串）→ 400 { error }', async () => {
+    const broken = new Request('http://x/api/auth', { method: 'POST', body: '{oops', headers: { 'content-type': 'application/json' } })
+    expect((await POST(broken)).status).toBe(400)
+    expect((await POST(post({}))).status).toBe(400)
+    expect((await POST(post({ password: 123 }))).status).toBe(400)
+  })
+
+  it('PASSWORD 未设：POST 正确密码也 401（无合法口令）；GET → { enabled: false }', async () => {
+    delete process.env.PASSWORD
+    const res = await POST(post({ password: 'p' }))
+    expect(res.status).toBe(401)
+    const getRes = await GET()
+    expect(await getRes.json()).toEqual({ enabled: false })
+  })
+
+  it('GET：PASSWORD 已设 → { enabled: true }（登录页判断用，不受守卫保护）', async () => {
+    const res = await GET()
+    expect(await res.json()).toEqual({ enabled: true })
+  })
+})

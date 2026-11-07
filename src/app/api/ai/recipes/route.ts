@@ -7,6 +7,7 @@ import { loadAiConfig, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, extractRecipeJson } from '@/lib/ai-prompts'
 import { listRecipes } from '@/lib/recipe-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
+import { requireAuth } from '@/lib/auth'
 
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
@@ -71,6 +72,8 @@ function buildUserMessage(input: {
 
 // POST handler：参数校验 → 400；AI 配置 → 503；生成+解析（失败重试一次）→ 200/502
 export async function POST(req: Request): Promise<Response> {
+  const denied = requireAuth(req)
+  if (denied) return denied
   const input = await parseInput(req)
   if (!input) {
     return Response.json({ error: '参数缺失或非法：ingredients 与 dish 至少提供一个，servings 须为正整数' }, { status: 400 })

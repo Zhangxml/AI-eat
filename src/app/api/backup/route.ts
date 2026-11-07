@@ -12,6 +12,7 @@ import { z } from 'zod'
 import { listRecipes, getRecipe, putRecipe } from '@/lib/recipe-store'
 import { validateRecipe } from '@/lib/recipe-types'
 import type { Recipe } from '@/lib/recipe-types'
+import { requireAuth } from '@/lib/auth'
 
 // 顶层结构 schema：只约束「recipes 键存在且为数组」，元素类型 unknown 交由逐条校验，
 // 不加 .strict()——顶层多余字段（如手改文件加的备注键）容忍，不卡死整体
@@ -28,7 +29,9 @@ function backupDateString(now: Date): string {
 }
 
 // GET /api/backup → 200 { exportedAt; recipes } + attachment 头
-export async function GET(): Promise<Response> {
+export async function GET(req: Request): Promise<Response> {
+  const denied = requireAuth(req)
+  if (denied) return denied
   const { recipes } = await listRecipes()
   const body = JSON.stringify({ exportedAt: new Date().toISOString(), recipes })
   return new Response(body, {
@@ -66,6 +69,8 @@ async function importOne(item: unknown, index: number): Promise<ItemResult> {
 
 // POST /api/backup → 逐条导入 → 200 { imported; skipped; skippedIds; invalidIds } | 400 { error }
 export async function POST(req: Request): Promise<Response> {
+  const denied = requireAuth(req)
+  if (denied) return denied
   let body: unknown
   try {
     body = await req.json()

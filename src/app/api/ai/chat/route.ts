@@ -13,6 +13,7 @@ import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, extractRecipeJson } from '
 import { listRecipes } from '@/lib/recipe-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
+import { requireAuth } from '@/lib/auth'
 
 // 重试提示（与 Task 10 同款提示词模式；测试断言依赖此文案）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
@@ -185,6 +186,8 @@ function processUpstreamChunk(
 
 // POST handler：参数校验 → 400；AI 配置 → 503；上游请求失败 → 502；正常 → SSE 流
 export async function POST(req: Request): Promise<Response> {
+  const denied = requireAuth(req)
+  if (denied) return denied
   const messages = await parseInput(req)
   if (!messages) {
     return Response.json({ error: '参数缺失或非法：messages 须为非空的消息数组' }, { status: 400 })
