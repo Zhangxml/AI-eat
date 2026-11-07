@@ -1,0 +1,128 @@
+// POST /api/ai/recipes：AI 结构化菜谱生成（Task 10，设计 5.2/5.3）
+// 契约：body { ingredients?: string[]; dish?: string; servings?: number }，ingredients 与 dish 至少一个
+// → 200 { recipe: Recipe }（不写盘，入库由前端 POST /api/recipes 完成）
+// | 400 { error }（参数缺失/非法）| 503 { error }（AI 未配置，loadAiConfig throw）
+// | 502 { error: 'AI 输出两次均无法解析…' }（第一次解析失败重试一次，仍失败才 502）
+import { loadAiConfig, aiComplete, type ChatMessage } from '@/lib/ai-client'
+import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, extractRecipeJson } from '@/lib/ai-prompts'
+import { listRecipes } from '@/lib/recipe-store'
+import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
+
+// 重试提示（第二次请求附在用户消息后；测试断言依赖此文案）
+const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
+
+// 读取 JSON body 并做参数校验；非法返回 null（route 层转 400）
+async function parseInput(
+  req: Request,
+): Promise<{ ingredients?: string[]; dish?: string; servings?: number } | null> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return null
+  }
+  if (typeof body !== 'object' || body === null) return null
+  const b = body as Record<string, unknown>
+
+  // ingredients：可选字符串数组（每项 trim 后须非空；整体 trim 后全空视为未提供）
+  let ingredients: string[] | undefined
+  if (b.ingredients !== undefined) {
+    if (!Array.isArray(b.ingredients) || !b.ingredients.every(i => typeof i === 'string')) {
+      return null
+    }
+    const trimmed = (b.ingredients as string[]).map(s => s.trim()).filter(s => s !== '')
+    if (trimmed.length > 0) ingredients = trimmed
+  }
+
+  // dish：可选非空字符串
+  let dish: string | undefined
+  if (typeof b.dish === 'string' && b.dish.trim() !== '') dish = b.dish.trim()
+
+  // servings：可选正整数
+  let servings: number | undefined
+  if (b.servings !== undefined) {
+    if (typeof b.servings !== 'number' || !Number.isInteger(b.servings) || b.servings < 1) {
+      return null
+    }
+    servings = b.servings
+  }
+
+  // ingredients 与 dish 至少一个非空，否则 400
+  if (ingredients === undefined && dish === undefined) return null
+  return { ingredients, dish, servings }
+}
+
+// 组装用户消息：食材/菜名/份量拼装
+function buildUserMessage(input: {
+  ingredients?: string[]
+  dish?: string
+  servings?: number
+}): string {
+  const parts: string[] = []
+  if (input.ingredients) {
+    parts.push(`现有食材：${input.ingredients.join('、')}，请推荐可用这些食材做的菜谱`)
+  }
+  if (input.dish) {
+    parts.push(`我想做：${input.dish}`)
+  }
+  parts.push(input.servings ? `份数：${input.servings} 人份` : '份数：默认 2 人份')
+  return parts.join('；') + '。'
+}
+
+// POST handler：参数校验 → 400；AI 配置 → 503；生成+解析（失败重试一次）→ 200/502
+export async function POST(req: Request): Promise<Response> {
+  const input = await parseInput(req)
+  if (!input) {
+    return Response.json({ error: '参数缺失或非法：ingredients 与 dish 至少提供一个，servings 须为正整数' }, { status: 400 })
+  }
+
+  // AI 未配置：loadAiConfig throw 中文错误 → 503（env 真实路径，测试只 mock aiComplete）
+  let cfg
+  try {
+    cfg = loadAiConfig()
+  } catch (e) {
+    return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
+  }
+
+  // 系统消息 = 人设 + 库摘要 + 格式规则；用户消息 = 食材/菜名/份量拼装
+  const { recipes } = await listRecipes()
+  const system: ChatMessage = {
+    role: 'system',
+    content: [systemPromptWithLibrary(recipes), RECIPE_FORMAT_RULE].join('\n'),
+  }
+  const baseUser: ChatMessage = { role: 'user', content: buildUserMessage(input) }
+
+  // 第一次调用；解析失败（含上游异常）则附重试提示再调一次，两次都失败才 502
+  let firstError: string | null = null
+  let recipe: Recipe | null = null
+  try {
+    recipe = extractRecipeJson(await aiComplete(cfg, [system, baseUser]))
+  } catch (e) {
+    firstError = e instanceof Error ? e.message : String(e)
+  }
+
+  if (!recipe) {
+    const retryUser: ChatMessage = { ...baseUser, content: `${baseUser.content}${RETRY_HINT}` }
+    try {
+      recipe = extractRecipeJson(await aiComplete(cfg, [system, retryUser]))
+    } catch (e) {
+      firstError = e instanceof Error ? e.message : String(e)
+    }
+  }
+  if (!recipe) {
+    // 502 文案带首轮错误详情，便于排查上游异常
+    const detail = firstError ? `（${firstError}）` : ''
+    return Response.json({ error: `AI 输出两次均无法解析为合法菜谱${detail}` }, { status: 502 })
+  }
+
+  // 硬条件：AI 可能照抄提示词示例的 id/时间戳（r-1730000000-ab12cd 能过 strict schema 校验），
+  // 因此解析成功后必须无条件覆写三字段 + 强制 source='ai'，AI 提供的这三字段只当格式合规信号
+  recipe.id = makeRecipeId()
+  const now = new Date().toISOString()
+  recipe.createdAt = now
+  recipe.updatedAt = now
+  recipe.source = 'ai'
+
+  // 不写盘：直接返回 recipe，入库由前端 POST /api/recipes 完成
+  return Response.json({ recipe })
+}
