@@ -18,6 +18,8 @@ services:
       - AI_API_KEY=${AI_API_KEY:-}
       - AI_MODEL=${AI_MODEL:-}
       - PASSWORD=${PASSWORD:-}
+      - DELETE_ENABLED=${DELETE_ENABLED:-}
+      - DELETE_PASSWORD=${DELETE_PASSWORD:-}
       # 数据目录固定指向挂载点内的 recipes 子目录，保证容器写文件直接落到宿主机 ./data/recipes/
       - AI_EAT_DATA_DIR=/app/data/recipes
     restart: unless-stopped

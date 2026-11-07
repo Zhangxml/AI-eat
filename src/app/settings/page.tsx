@@ -14,6 +14,7 @@ interface ConfigResponse {
   baseUrl: string | null
   model: string | null
   authEnabled: boolean
+  deleteEnabled: boolean
 }
 
 // POST /api/backup 导入结果契约
@@ -230,6 +231,18 @@ export default function SettingsPage() {
             : config.authEnabled
               ? '已启用（需口令登录后访问）'
               : '未启用（局域网信任边界，无需登录）'}
+        </p>
+      </section>
+
+      {/* 删除保护状态展示：DELETE_ENABLED+DELETE_PASSWORD 是否启用（删除菜谱需输密码，服务端校验） */}
+      <section className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+        <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">删除保护</h2>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          {config === null
+            ? '状态加载失败'
+            : config.deleteEnabled
+              ? '已启用（删除菜谱需输入删除密码，服务端校验）'
+              : '未启用（删除仅浏览器确认，无密码校验）。启用：设置 DELETE_ENABLED=true 与 DELETE_PASSWORD 后重启'}
         </p>
       </section>
     </main>

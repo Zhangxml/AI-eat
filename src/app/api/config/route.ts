@@ -19,5 +19,7 @@ export async function GET(req: Request): Promise<Response> {
     model: aiConfigured ? (AI_MODEL as string) : null,
     // 鉴权开关与守卫共用同一函数，语义永不分叉
     authEnabled: authEnabled(),
+    // 删除保护开关状态（设置页展示 + 前端删除交互分派）：显式 DELETE_ENABLED=true 且密码非空
+    deleteEnabled: process.env.DELETE_ENABLED === 'true' && Boolean(process.env.DELETE_PASSWORD),
   })
 }

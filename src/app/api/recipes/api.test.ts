@@ -138,4 +138,37 @@ describe('菜谱库 REST API', () => {
       delete process.env.PASSWORD
     }
   })
+
+  it('删除保护未启用：DELETE 不带密码直接 204（默认行为不变）', async () => {
+    const created = await (await createR(json(goodDraft))).json()
+    const res = await delR(new Request('http://x', { method: 'DELETE' }), ctxOf(created.id))
+    expect(res.status).toBe(204)
+  })
+
+  it('删除保护启用：无密码/错密码/非字符串 → 403；正确密码 → 204（恒时比较）', async () => {
+    const created = await (await createR(json(goodDraft))).json()
+    try {
+      process.env.DELETE_ENABLED = 'true'
+      process.env.DELETE_PASSWORD = 'del-secret'
+      const ctx = ctxOf(created.id)
+      // 无 body / 非法 body / 密码字段缺失 / 非字符串 → 全部 403 同文案（不区分原因，防探测）
+      expect((await delR(new Request('http://x', { method: 'DELETE' }), ctx)).status).toBe(403)
+      const bad = await delR(new Request('http://x', { method: 'DELETE', body: '{oops' }), ctx)
+      expect(bad.status).toBe(403)
+      const wrong = await delR(json({ deletePassword: 'wrong' }), ctx)
+      expect(wrong.status).toBe(403)
+      expect(((await wrong.json()) as { error: string }).error).toContain('删除密码校验失败')
+      expect((await delR(json({ deletePassword: 123 }), ctx)).status).toBe(403)
+      // 正确密码 → 204 且菜谱真的删掉了
+      expect((await delR(json({ deletePassword: 'del-secret' }), ctx)).status).toBe(204)
+      expect((await getR(new Request('http://x'), ctx)).status).toBe(404)
+      // 开关半配（DELETE_ENABLED=true 但密码为空）视为未启用：直接删除成功
+      delete process.env.DELETE_PASSWORD
+      const second = await (await createR(json(goodDraft))).json()
+      expect((await delR(new Request('http://x', { method: 'DELETE' }), ctxOf(second.id))).status).toBe(204)
+    } finally {
+      delete process.env.DELETE_ENABLED
+      delete process.env.DELETE_PASSWORD
+    }
+  })
 })

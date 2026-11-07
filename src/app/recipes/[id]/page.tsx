@@ -46,6 +46,19 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
   const [notFound, setNotFound] = useState(false)
   const [errorText, setErrorText] = useState('')
   const [deleting, setDeleting] = useState(false)
+  // 删除保护（可选）：deleteEnabled 由 /api/config 提供；启用时点删除弹密码小窗，服务端二次校验
+  const [deleteEnabled, setDeleteEnabled] = useState(false)
+  const [pwdOpen, setPwdOpen] = useState(false)
+  const [deletePwd, setDeletePwd] = useState('')
+  const [pwdError, setPwdError] = useState('')
+
+  // 拉取删除保护开关（失败按未启用兜底：服务端 DELETE 才是强制校验点，此处只是交互分派）
+  useEffect(() => {
+    apiFetch('/api/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d: { deleteEnabled?: boolean } | null) => setDeleteEnabled(Boolean(d?.deleteEnabled)))
+      .catch(() => setDeleteEnabled(false))
+  }, [])
 
   // 拉取详情：GET 200 裸 Recipe 进入详情态；404 进 404 态（提示并给回列表入口）
   const loadRecipe = useCallback(async () => {
@@ -76,13 +89,30 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
     void loadRecipe()
   }, [loadRecipe])
 
-  // 删除：confirm 确认 → DELETE → 204 跳回列表；404 提示后同样回列表
-  async function handleDelete() {
+  // 删除分派：启用保护 → 弹密码小窗（确认时带密码调 handleDelete）；未启用 → 原 confirm 流程
+  function onDeleteClick() {
     if (!recipe || deleting) return
-    if (!confirm(`确定删除「${recipe.name}」吗？删除后无法恢复。`)) return
+    if (deleteEnabled) {
+      setDeletePwd('')
+      setPwdError('')
+      setPwdOpen(true)
+      return
+    }
+    void handleDelete()
+  }
+
+  // 删除：confirm 确认 → DELETE → 204 跳回列表；404 提示后同样回列表
+  // 启用删除保护时 body 携带 { deletePassword }，服务端恒时比较，403 = 密码错误
+  async function handleDelete(deletePassword?: string) {
+    if (!recipe || deleting) return
+    const body = deletePassword !== undefined ? { deletePassword } : undefined
     setDeleting(true)
     try {
-      const res = await apiFetch(`/api/recipes/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/recipes/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      })
       if (res.status === 204) {
         router.push('/recipes')
         return
@@ -91,6 +121,11 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
         // 已不存在：提示后回列表（列表显示的即是最新状态）
         alert('该菜谱已不存在，即将返回列表')
         router.push('/recipes')
+        return
+      }
+      if (res.status === 403) {
+        // 密码错误：留在弹窗内提示重输（服务端不区分「未提供」与「错误」，避免探测）
+        setPwdError(await extractError(res, '删除密码校验失败'))
         return
       }
       alert(await extractError(res, '删除失败，请稍后重试'))
@@ -218,7 +253,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           </button>
           <button
             type="button"
-            onClick={() => void handleDelete()}
+            onClick={onDeleteClick}
             disabled={deleting}
             className="shrink-0 rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 transition-colors active:bg-red-50 disabled:opacity-60 dark:border-red-900 dark:text-red-400 dark:active:bg-red-950"
           >
@@ -315,6 +350,62 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           ))}
         </ol>
       </section>
+
+      {/* 删除密码小窗（deleteEnabled 时点删除弹出）：收集口令 → 确认时带密码调 handleDelete */}
+      {pwdOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-900/50 px-6 dark:bg-neutral-950/60"
+          role="dialog"
+          aria-modal="true"
+          aria-label="删除密码校验"
+        >
+          <div className="w-full max-w-sm rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+            <h2 className="mb-1 text-base font-medium text-neutral-900 dark:text-neutral-100">删除校验</h2>
+            <p className="mb-3 text-sm text-neutral-500 dark:text-neutral-400">
+              输入删除密码以删除「{recipe.name}」，删除后无法恢复。
+            </p>
+            <input
+              type="password"
+              value={deletePwd}
+              onChange={(e) => {
+                setDeletePwd(e.target.value)
+                setPwdError('')
+              }}
+              onKeyDown={(e) => {
+                // Enter 直接确认（密码非空时）；Escape 关闭弹窗
+                if (e.key === 'Enter' && deletePwd !== '' && !deleting) {
+                  void handleDelete(deletePwd).then(() => {
+                    // 204 成功会跳转；失败（含密码错误）留在弹窗，错误文案已在 handleDelete 内写入 pwdError
+                  })
+                }
+                if (e.key === 'Escape') setPwdOpen(false)
+              }}
+              autoFocus
+              aria-label="删除密码"
+              className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
+            />
+            {pwdError !== '' && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{pwdError}</p>}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPwdOpen(false)}
+                className="shrink-0 rounded-lg border border-neutral-300 px-3 py-1.5 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDelete(deletePwd)}
+                disabled={deletePwd === '' || deleting}
+                aria-label="确认删除"
+                className="shrink-0 rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 transition-colors active:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:active:bg-red-950"
+              >
+                {deleting ? '删除中…' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }

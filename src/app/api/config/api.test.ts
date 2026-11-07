@@ -40,6 +40,8 @@ describe('配置接口 /api/config', () => {
       baseUrl: 'https://api.deepseek.com',
       model: 'deepseek-chat',
       authEnabled: true,
+      // 删除保护未配置（env 未设）→ false；显式 true 配置见下方独立用例
+      deleteEnabled: false,
     })
   })
 
@@ -48,8 +50,29 @@ describe('配置接口 /api/config', () => {
     delete process.env.AI_API_KEY
     delete process.env.AI_MODEL
     delete process.env.PASSWORD
+    delete process.env.DELETE_ENABLED
+    delete process.env.DELETE_PASSWORD
     const body = await (await GET(getReq(false))).json()
-    expect(body).toEqual({ aiConfigured: false, baseUrl: null, model: null, authEnabled: false })
+    expect(body).toEqual({ aiConfigured: false, baseUrl: null, model: null, authEnabled: false, deleteEnabled: false })
+  })
+
+  it('删除保护开关：DELETE_ENABLED=true 且密码非空 → deleteEnabled=true；半配/关闭 → false', async () => {
+    // 完整配置 → true
+    process.env.DELETE_ENABLED = 'true'
+    process.env.DELETE_PASSWORD = 'del-pw'
+    let body = await (await GET(getReq(false))).json() as { deleteEnabled: boolean }
+    expect(body.deleteEnabled).toBe(true)
+    // 半配：开关 true 但密码空 → false（防只配一半半失效）
+    delete process.env.DELETE_PASSWORD
+    body = await (await GET(getReq(false))).json() as { deleteEnabled: boolean }
+    expect(body.deleteEnabled).toBe(false)
+    // 开关 false 但密码非空 → false
+    process.env.DELETE_ENABLED = 'false'
+    process.env.DELETE_PASSWORD = 'del-pw'
+    body = await (await GET(getReq(false))).json() as { deleteEnabled: boolean }
+    expect(body.deleteEnabled).toBe(false)
+    delete process.env.DELETE_ENABLED
+    delete process.env.DELETE_PASSWORD
   })
 
   it('AI 变量缺一即 aiConfigured=false（三变量全非空的合取语义）', async () => {
@@ -68,8 +91,14 @@ describe('配置接口 /api/config', () => {
     process.env.AI_API_KEY = 'sk-secret-should-never-leak'
     process.env.AI_MODEL = 'deepseek-chat'
     process.env.PASSWORD = 'pw'
+    // 删除保护密码同样是敏感值，一并断言不泄漏
+    process.env.DELETE_PASSWORD = 'del-secret-should-never-leak'
     const body = await (await GET(getReq(true))).json() as Record<string, unknown>
     expect(Object.keys(body)).not.toContain('apiKey')
+    expect(Object.keys(body)).not.toContain('deletePassword')
     expect(JSON.stringify(body)).not.toContain('sk-secret-should-never-leak')
+    expect(JSON.stringify(body)).not.toContain('del-secret-should-never-leak')
+    delete process.env.DELETE_ENABLED
+    delete process.env.DELETE_PASSWORD
   })
 })

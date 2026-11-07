@@ -3,6 +3,7 @@ import { getRecipe, updateRecipe, deleteRecipe } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe } from '@/lib/recipe-types'
 import { requireAuth } from '@/lib/auth'
+import { timingSafeEqual } from 'node:crypto'
 
 // 读取 JSON body 并用 zod 校验为草稿；解析失败或校验失败返回 null
 async function parseDraft(req: Request): Promise<DraftRecipe | null> {
@@ -43,10 +44,39 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   return Response.json(recipe)
 }
 
-// DELETE /api/recipes/:id → 204 无 body | 404 { error }
-export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const denied = requireAuth(_req)
+// DELETE /api/recipes/:id → 204 无 body | 403 { error }（删除密码校验失败）| 404 { error }
+// 删除保护（可选启用）：env DELETE_ENABLED=true 且 DELETE_PASSWORD 非空时，
+// 请求必须携带 { deletePassword } 且与服务端值恒时比较通过才能删除；未启用时行为不变
+export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const denied = requireAuth(req)
   if (denied) return denied
+  // 删除保护开关：显式 DELETE_ENABLED=true 且密码非空才启用（两个条件缺一不可，防只配一半半失效）
+  const deleteGuardEnabled = process.env.DELETE_ENABLED === 'true' && Boolean(process.env.DELETE_PASSWORD)
+  let suppliedPassword: string | undefined
+  if (deleteGuardEnabled) {
+    // 启用保护时必须读 body 取密码；格式非法按校验失败处理（403 与密码错误同文案，不泄漏具体原因）
+    let body: unknown
+    try {
+      body = await req.json()
+    } catch {
+      return Response.json({ error: '删除密码校验失败' }, { status: 403 })
+    }
+    if (typeof body !== 'object' || body === null) {
+      return Response.json({ error: '删除密码校验失败' }, { status: 403 })
+    }
+    const b = body as Record<string, unknown>
+    if (typeof b.deletePassword !== 'string') {
+      return Response.json({ error: '删除密码校验失败' }, { status: 403 })
+    }
+    suppliedPassword = b.deletePassword
+    // 恒时比较（复用 auth 的 timingSafeEqual 语义，防时序侧信道）
+    const expected = process.env.DELETE_PASSWORD ?? ''
+    const a = Buffer.from(suppliedPassword, 'utf8')
+    const bb = Buffer.from(expected, 'utf8')
+    if (a.length !== bb.length || !timingSafeEqual(a, bb)) {
+      return Response.json({ error: '删除密码校验失败' }, { status: 403 })
+    }
+  }
   const { id } = await ctx.params
   const deleted = await deleteRecipe(id)
   if (!deleted) {
