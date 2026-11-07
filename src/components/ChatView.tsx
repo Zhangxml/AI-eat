@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
 import { readSse } from '@/lib/sse-client'
+import { buildHistory } from '@/lib/chat-history'
 import RecipeCard from '@/components/RecipeCard'
 import type { Recipe } from '@/lib/recipe-types'
 
@@ -59,6 +60,8 @@ export default function ChatView() {
   const [pending, setPending] = useState(false)
   // 每条 assistant 消息的入库状态：以 recipe.id 记录，saved 后按钮禁用防重复点击
   const [savedIds, setSavedIds] = useState<Record<string, boolean>>({})
+  // 入库请求进行中的 id 集合：请求往返期间与 saved 一样禁用按钮（201 响应前双击不再二次发请求）
+  const [savingIds, setSavingIds] = useState<Record<string, boolean>>({})
   // 自动滚底：气泡区 ref，增量/卡片/错误到达时滚动到底
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -70,7 +73,9 @@ export default function ChatView() {
 
   // 入库：POST /api/recipes（契约 Task 4：201 裸 Recipe | 400 { error: 中文 }）
   async function saveRecipe(recipe: Recipe) {
-    if (savedIds[recipe.id]) return // 已入库直接返回（防抖兜底，按钮禁用为主）
+    // 防抖兜底：已入库或请求进行中直接返回（按钮禁用为主，此判断防极端连点）
+    if (savedIds[recipe.id] || savingIds[recipe.id]) return
+    setSavingIds((prev) => ({ ...prev, [recipe.id]: true }))
     try {
       const res = await apiFetch('/api/recipes', {
         method: 'POST',
@@ -92,6 +97,13 @@ export default function ChatView() {
       alert(msg)
     } catch {
       alert('存入菜谱库失败，网络异常，请稍后重试')
+    } finally {
+      // 请求结束（无论成败）必移出 in-flight 集合；成功后由 savedIds 接管禁用
+      setSavingIds((prev) => {
+        const next = { ...prev }
+        delete next[recipe.id]
+        return next
+      })
     }
   }
 
@@ -102,7 +114,7 @@ export default function ChatView() {
     setInput('')
     setPending(true)
     // 追加用户消息 + 空 assistant 占位（流式增量拼进它）
-    const history = items.map((it) => ({ role: it.role, content: it.text }))
+    const history = buildHistory(items, text)
     setItems((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '' }])
     // 当前 assistant 占位在数组中的下标（闭包内恒定，直接用索引更新）
     const idx = items.length + 1
@@ -194,6 +206,7 @@ export default function ChatView() {
                     recipe={it.recipe}
                     onSave={() => void saveRecipe(it.recipe!)}
                     saved={savedIds[it.recipe.id] ?? false}
+                    saving={savingIds[it.recipe.id] ?? false}
                   />
                 )}
               </div>

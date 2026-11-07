@@ -2,6 +2,8 @@
 
 // RecipeCard：菜谱展示卡片（Task 12），聊天页与点菜页（T14）共用
 // props 契约（与简报一字不差）：{ recipe: Recipe; onSave?: () => void; saved?: boolean }
+// 审查修复新增可选扩展 prop：saving?: boolean（入库请求 in-flight 时禁用按钮，防止 201 往返期间双击双入库；
+// 缺省 false，T14 复用时可不传，原有三 props 语义不变）
 // - 名称、分类徽标（可选，无分类不渲染）、时长、份数、食材表（名称+用量）、步骤有序列表、营养
 // - 营养：有值显示数值并标注「估算值」，缺失显示「未估算」
 // - onSave 存在时渲染「存入菜谱库」按钮；saved 为 true 时按钮变「已入库」且禁用（防重复点击）
@@ -12,10 +14,12 @@ export default function RecipeCard({
   recipe,
   onSave,
   saved,
+  saving,
 }: {
   recipe: Recipe
   onSave?: () => void
   saved?: boolean
+  saving?: boolean
 }) {
   return (
     <section
@@ -79,16 +83,16 @@ export default function RecipeCard({
         )}
       </div>
 
-      {/* 入库按钮：仅宿主提供 onSave 时渲染；saved 后变「已入库」禁用（同时即防重复点击） */}
+      {/* 入库按钮：仅宿主提供 onSave 时渲染；saved（已入库）或 saving（请求 in-flight）均禁用（防重复/防双击） */}
       {onSave && (
         <button
           type="button"
           onClick={onSave}
-          disabled={saved}
+          disabled={saved || saving}
           aria-label={saved ? '已入库' : '存入菜谱库'}
           className="min-h-[44px] w-full rounded-lg bg-neutral-900 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500"
         >
-          {saved ? '已入库' : '存入菜谱库'}
+          {saved ? '已入库' : saving ? '入库中…' : '存入菜谱库'}
         </button>
       )}
     </section>
