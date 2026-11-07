@@ -25,7 +25,7 @@ npm ci
 cp .env.example .env
 vim .env
 
-# 3. 构建 + 后台启动（默认端口 8080，可用 PORT=xxx 覆盖）
+# 3. 构建 + 后台启动（默认端口 8888，可用 PORT=xxx 覆盖）
 ./run.sh
 
 # 其他命令
@@ -43,7 +43,7 @@ vim .env
 cp .env.example .env
 vim .env
 
-# 2. 构建并启动（宿主机 8080 → 容器 3000，数据落宿主机 ./data）
+# 2. 构建并启动（宿主机 8888 → 容器 3000，数据落宿主机 ./data）
 docker compose up -d
 
 # 查看日志 / 停止
@@ -75,7 +75,7 @@ docker compose down
 启动后同一局域网内的手机/平板直接访问：
 
 ```
-http://<服务器IP>:8080
+http://<服务器IP>:8888
 ```
 
 服务器 IP 可用 `./run.sh status` 查看。建议部署时设置 `PASSWORD` 启用口令鉴权（本应用面向局域网信任边界设计，未启用鉴权时局域网内任何人可读写菜谱数据）。

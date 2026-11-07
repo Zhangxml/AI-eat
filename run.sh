@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # AI-eat 裸机启动脚本：构建（增量）→ 后台启动 → 探测端口 → 打印局域网地址
-# 用法：./run.sh [start|stop|restart|status]，PORT 环境变量可覆盖默认 8080
+# 用法：./run.sh [start|stop|restart|status]，PORT 环境变量可覆盖默认 8888
 #
 # 进程管理取舍：npm start 的孙进程会被 Next 改名为 "next-server (v…)"，按命令行 pkill -f
 # "next start" 匹配不到，按 cwd 匹配 node 又会误伤同目录的 next dev 开发进程；
@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PORT="${PORT:-8080}"
+PORT="${PORT:-8888}"
 LOG_FILE="ai-eat.log"
 PID_FILE=".ai-eat.pid"
 

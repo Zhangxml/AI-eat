@@ -21,7 +21,7 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-# 0.0.0.0 才能让容器端口映射出去；容器内固定 3000，由 compose 映射到宿主机 8080
+# 0.0.0.0 才能让容器端口映射出去；容器内固定 3000，由 compose 映射到宿主机 8888
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
