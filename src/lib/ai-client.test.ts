@@ -14,20 +14,23 @@ afterEach(() => {
 
 describe('AI 客户端', () => {
   it('loadAiConfig 缺变量抛中文错误', () => {
-    const empty = {} as Record<string, string | undefined>
+    // Next 的 global.d.ts 把 ProcessEnv.NODE_ENV 声明为必填，测试局部 env 只注入 AI_* 变量，
+    // 直转 as NodeJS.ProcessEnv 因重叠不足被 TS 拒绝，须经 unknown 中转（测试语义不变）
+    const empty = {} as unknown as NodeJS.ProcessEnv
     expect(() => loadAiConfig(empty)).toThrow(/AI 配置缺失/)
     // 缺其中一个也抛
     expect(() =>
-      loadAiConfig({ AI_BASE_URL: 'https://x', AI_API_KEY: 'k' } as Record<string, string | undefined>),
+      loadAiConfig({ AI_BASE_URL: 'https://x', AI_API_KEY: 'k' } as unknown as NodeJS.ProcessEnv),
     ).toThrow(/AI 配置缺失：请设置 AI_BASE_URL \/ AI_API_KEY \/ AI_MODEL/)
   })
 
   it('loadAiConfig 三变量齐全时返回配置', () => {
     expect(
-      loadAiConfig({ AI_BASE_URL: 'https://x/', AI_API_KEY: 'k', AI_MODEL: 'm' } as Record<
-        string,
-        string | undefined
-      >),
+      loadAiConfig({
+        AI_BASE_URL: 'https://x/',
+        AI_API_KEY: 'k',
+        AI_MODEL: 'm',
+      } as unknown as NodeJS.ProcessEnv),
     ).toEqual({ baseUrl: 'https://x/', apiKey: 'k', model: 'm' })
   })
 
