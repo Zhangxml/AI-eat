@@ -1,0 +1,153 @@
+// POST /api/ai/menu：AI 点菜接口（Task 13，设计 5.2）
+// 契约：body { people: number; preference?: string }（people 必填 ≥1 整数，preference 可选口味偏好）
+// → 200 { dishes: { name; category: '荤菜'|'素菜'|'汤'|'主食'|'其他'; reason }[]; shopping: string[] }
+//   （zod schema 轻量校验，不含步骤；菜单构成考虑人数与荤素搭配，优先推荐库中已有菜并在 reason 标注）
+// | 400 { error }（people 缺失/非法）| 503 { error }（AI 未配置，loadAiConfig throw）
+// | 502 { error: 'AI 输出两次均无法解析…' }（第一次解析失败重试一次，仍失败才 502，模式与 Task 10 一致）
+// 说明：menu 的 zod schema 仅本接口单一消费者，放在 route 文件内，不独立 lib
+import { z } from 'zod'
+import { loadAiConfig, aiComplete, type ChatMessage } from '@/lib/ai-client'
+import { systemPromptWithLibrary, extractJson } from '@/lib/ai-prompts'
+import { listRecipes } from '@/lib/recipe-store'
+
+// 重试提示（第二次请求附在用户消息后；测试断言依赖此文案，与 Task 10/11 同款）
+const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
+
+// 菜单项：轻量三字段（不含步骤/食材明细），category 限五枚举，name/reason 必填非空
+const dishSchema = z
+  .object({
+    name: z.string().min(1),
+    category: z.enum(['荤菜', '素菜', '汤', '主食', '其他']),
+    reason: z.string().min(1),
+  })
+  .strict()
+
+// 菜单整体：dishes 至少一道（推荐结果不允许为空），shopping 为采购清单字符串数组
+const menuSchema = z
+  .object({
+    dishes: z.array(dishSchema).min(1),
+    shopping: z.array(z.string()),
+  })
+  .strict()
+
+// 解析 AI 输出为合法菜单：extractJson 三形态均可解（<menu> 标签内的 JSON 由全文平衡扫描兜底命中），
+// JSON 非法或 zod 校验失败返回 null，不产生半成品
+function extractMenuJson(text: string): z.infer<typeof menuSchema> | null {
+  return extractJson(text, seg => {
+    try {
+      const result = menuSchema.safeParse(JSON.parse(seg))
+      return result.success ? result.data : null
+    } catch {
+      return null
+    }
+  })
+}
+
+// 读取 JSON body 并做参数校验；非法返回 null（route 层转 400）
+async function parseInput(
+  req: Request,
+): Promise<{ people: number; preference?: string } | null> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return null
+  }
+  if (typeof body !== 'object' || body === null) return null
+  const b = body as Record<string, unknown>
+
+  // people：必填正整数（缺失、0、负数、小数、非数字均 400）
+  if (typeof b.people !== 'number' || !Number.isInteger(b.people) || b.people < 1) return null
+
+  // preference：可选字符串；提供了但类型非法（非 string）→ 400，不静默丢弃用户意图
+  let preference: string | undefined
+  if (b.preference !== undefined) {
+    if (typeof b.preference !== 'string') return null
+    const trimmed = b.preference.trim()
+    if (trimmed !== '') preference = trimmed
+  }
+  return { people: b.people, preference }
+}
+
+// 组装用户消息：人数（含份量级提示：people≥4 建议菜数不少于人数）、口味偏好、荤素搭配、库中已有菜优先强调
+function buildUserMessage(input: { people: number; preference?: string }): string {
+  const parts: string[] = [`今天 ${input.people} 人吃饭`]
+  // 份量级提示：人数多时建议菜数水涨船高，避免 AI 只给两三道
+  if (input.people >= 4) {
+    parts.push(`建议菜数不少于 ${input.people} 道`)
+  }
+  if (input.preference) {
+    parts.push(`口味偏好：${input.preference}`)
+  }
+  parts.push('请注意荤素搭配，合理组合荤菜、素菜、汤和主食')
+  // 库中已有菜优先（与系统提示词的库摘要呼应，测试断言依赖此文案）
+  parts.push('菜谱库中已有的菜优先考虑，并在推荐理由中注明「已有菜谱」')
+  return parts.join('；') + '。'
+}
+
+// <menu> 标签输出格式规则（拼进系统提示词；JSON 模板与 extractMenuJson 的 menuSchema 对应）
+const MENU_FORMAT_RULE = [
+  '输出格式强制要求：你可以先用一两句话介绍，介绍文字之后必须输出一个 <menu> 标签，',
+  '标签内放置一份完整的菜单 JSON（不要在 JSON 外再加其他文字），最后以 </menu> 结束。',
+  'JSON 字段模板如下：',
+  '{',
+  '  "dishes": [{ "name": "<菜名>", "category": "<荤菜|素菜|汤|主食|其他 之一>", "reason": "<推荐理由，一两句话>" }],',
+  '  "shopping": ["<食材 用量，如：番茄 x2>", "<食材 用量>"]',
+  '}',
+  'dishes 至少一道；category 只能取 荤菜/素菜/汤/主食/其他 之一；shopping 为合并去重后的采购清单。',
+  '完整示例（2 人餐）：',
+  '<menu>{"dishes":[{"name":"番茄炒蛋","category":"荤菜","reason":"家常下饭，已有菜谱"},{"name":"清炒油麦菜","category":"素菜","reason":"清爽解腻"}],"shopping":["番茄 x2","鸡蛋 x3","油麦菜 x1把"]}</menu>',
+].join('\n')
+
+// POST handler：参数校验 → 400；AI 配置 → 503；生成+解析（失败重试一次）→ 200/502
+export async function POST(req: Request): Promise<Response> {
+  const input = await parseInput(req)
+  if (!input) {
+    return Response.json(
+      { error: '参数缺失或非法：people 须为不小于 1 的整数，preference 须为字符串' },
+      { status: 400 },
+    )
+  }
+
+  // AI 未配置：loadAiConfig throw 中文错误 → 503（env 真实路径，测试只 mock aiComplete）
+  let cfg
+  try {
+    cfg = loadAiConfig()
+  } catch (e) {
+    return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
+  }
+
+  // 系统消息 = 人设 + 库摘要 + <menu> 格式规则；用户消息 = 人数/偏好/搭配/已有菜优先拼装
+  const { recipes } = await listRecipes()
+  const system: ChatMessage = {
+    role: 'system',
+    content: [systemPromptWithLibrary(recipes), MENU_FORMAT_RULE].join('\n'),
+  }
+  const baseUser: ChatMessage = { role: 'user', content: buildUserMessage(input) }
+
+  // 第一次调用；解析失败（含上游异常）则附重试提示再调一次，两次都失败才 502
+  let firstError: string | null = null
+  let menu: z.infer<typeof menuSchema> | null = null
+  try {
+    menu = extractMenuJson(await aiComplete(cfg, [system, baseUser]))
+  } catch (e) {
+    firstError = e instanceof Error ? e.message : String(e)
+  }
+
+  if (!menu) {
+    const retryUser: ChatMessage = { ...baseUser, content: `${baseUser.content}${RETRY_HINT}` }
+    try {
+      menu = extractMenuJson(await aiComplete(cfg, [system, retryUser]))
+    } catch (e) {
+      firstError = e instanceof Error ? e.message : String(e)
+    }
+  }
+  if (!menu) {
+    // 502 文案带首轮错误详情，便于排查上游异常
+    const detail = firstError ? `（${firstError}）` : ''
+    return Response.json({ error: `AI 输出两次均无法解析为合法菜单${detail}` }, { status: 502 })
+  }
+
+  // 不写盘：直接返回菜单与采购清单，入库由前端自行决定
+  return Response.json({ dishes: menu.dishes, shopping: menu.shopping })
+}
