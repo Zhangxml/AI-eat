@@ -4,7 +4,7 @@
 // props 契约（与简报一字不差）：{ initial?: Recipe; onSubmit: (draft: DraftRecipe) => Promise<Response>; submitLabel: string }
 // 职责：受控收集字段 → 组装 DraftRecipe → 调 onSubmit；响应非 2xx 时 alert 中文错误
 // 行内校验策略：顶层必填项走浏览器原生 required/number 校验；食材/步骤/营养等行级语义在本组件内校验并 alert
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
 import type { DraftRecipe, Nutrition, Recipe } from '@/lib/recipe-types'
@@ -16,6 +16,34 @@ const CATEGORY_OPTIONS: NonNullable<Recipe['category']>[] = ['荤菜', '素菜',
 interface IngredientRow {
   name: string
   amount: string
+}
+
+// 步骤输入框：auto-grow 自适应高度——textarea 的 rows 属性只算显式换行，
+// 不算自动折行，长文本（AI 生成的步骤普遍 2~4 个视觉行）会被裁剪出内部滚动条，
+// 与页面外层滚动冲突。改为 ref 实测 scrollHeight 撑高：value 变化（手动输入/AI 回填）都重算。
+function StepTextarea({ value, idx, onChange }: { value: string; idx: number; onChange: (v: string) => void }) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const resize = () => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+  useLayoutEffect(resize, [value])
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={value}
+      onChange={(e) => {
+        onChange(e.target.value)
+        resize()
+      }}
+      placeholder={`步骤 ${idx + 1}`}
+      aria-label={`步骤 ${idx + 1}`}
+      className="w-full min-w-0 flex-1 resize-none overflow-hidden rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-base leading-6 text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
+    />
+  )
 }
 
 // AI 估算接口契约（Task 10 提供）：POST /api/ai/recipes → 200 { recipe } | 503 { error }
@@ -472,14 +500,11 @@ export default function RecipeForm({
         </span>
         <div className="flex flex-col gap-2">
           {steps.map((step, idx) => (
-            <div key={idx} className="flex items-start gap-2">
-              <textarea
-                rows={2}
+            <div key={idx} className="flex items-stretch gap-2">
+              <StepTextarea
                 value={step}
-                onChange={(e) => updateStep(idx, e.target.value)}
-                placeholder={`步骤 ${idx + 1}`}
-                aria-label={`步骤 ${idx + 1}`}
-                className="w-full min-w-0 flex-1 rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
+                idx={idx}
+                onChange={(v) => updateStep(idx, v)}
               />
               <button
                 type="button"
