@@ -214,7 +214,7 @@ export default function DishesPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
-      <h1 className="mb-3 text-lg font-medium text-neutral-900 dark:text-neutral-100">点菜</h1>
+      <h1 className="mb-3 text-lg font-medium text-neutral-900 dark:text-neutral-100">买什么</h1>
 
       {/* menu 请求失败的页面顶部错误条（400/502/503；502 文案含服务端解析详情） */}
       {menuError !== '' && (
