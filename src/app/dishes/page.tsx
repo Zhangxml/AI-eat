@@ -148,6 +148,13 @@ export default function DishesPage() {
         // 注意：/api/ai/recipes 200 为 { recipe } 包裹形状（与 /api/recipes 入库接口的裸 Recipe 不同）
         const data = (await res.json()) as { recipe: Recipe }
         setDishStates((prev) => ({ ...prev, [name]: { phase: 'ready', recipe: data.recipe } }))
+        // 生成完成后把展开的菜谱卡片滚入视口：RecipeCard 在菜卡列表内，手机上常落在视口外，
+        // 只见按钮变「已生成」而看不到内容；smooth 滚动避免生硬跳转
+        requestAnimationFrame(() => {
+          document
+            .querySelector(`li[aria-label="推荐菜：${CSS.escape(name)}"] section[aria-label^="菜谱："]`)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        })
         return
       }
       // 失败：仅该菜卡内局部红字（优先透出服务端中文 error），phase 回 idle 允许重试，不影响其他菜
