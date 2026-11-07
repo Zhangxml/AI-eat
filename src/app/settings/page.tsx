@@ -154,15 +154,15 @@ export default function SettingsPage() {
           {exporting ? '导出中…' : '导出备份（JSON 下载）'}
         </button>
 
-        {/* 导入：文件选择 + 开始导入；行内 flex 弹性收缩，无横向滚动；两按钮统一描边规格等高对齐
-            （file input 不设 min-h，其高度由 ::file-selector-button 决定，与右侧按钮同为 34px 基线对齐） */}
-        <div className="flex items-center gap-2">
+        {/* 导入：文件选择 + 开始导入（与导出按钮间距 12px）；行内 flex 弹性收缩，无横向滚动；
+            两按钮统一描边规格等高对齐（file input 不设 min-h，高度由 ::file-selector-button 决定） */}
+        <div className="mt-3 flex items-center gap-3">
           <input
             type="file"
             accept=".json,application/json"
             onChange={handleFileChange}
             aria-label="选择备份文件"
-            className="w-full min-w-0 flex-1 text-sm text-neutral-600 file:cursor-pointer file:rounded-lg file:border file:border-neutral-300 file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-neutral-900 dark:text-neutral-400 dark:file:border-neutral-700 dark:file:text-neutral-100"
+            className="w-full min-w-0 flex-1 text-sm text-neutral-600 file:cursor-pointer file:mr-3 file:rounded-lg file:border file:border-neutral-300 file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-neutral-900 dark:text-neutral-400 dark:file:border-neutral-700 dark:file:text-neutral-100"
           />
           <button
             type="button"
