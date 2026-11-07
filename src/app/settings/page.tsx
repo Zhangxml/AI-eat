@@ -154,21 +154,21 @@ export default function SettingsPage() {
           {exporting ? '导出中…' : '导出备份（JSON 下载）'}
         </button>
 
-        {/* 导入：文件选择 + 开始导入；行内 flex 弹性收缩，无横向滚动 */}
-        <div className="mt-4 flex items-center gap-2">
+        {/* 导入：文件选择 + 开始导入；行内 flex 弹性收缩，无横向滚动；两按钮统一描边规格等高对齐 */}
+        <div className="flex items-center gap-2">
           <input
             type="file"
             accept=".json,application/json"
             onChange={handleFileChange}
             aria-label="选择备份文件"
-            className="min-h-[44px] w-full min-w-0 flex-1 text-sm text-neutral-600 file:mr-2 file:rounded-lg file:border-0 file:bg-neutral-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white dark:text-neutral-400 dark:file:bg-neutral-100 dark:file:text-neutral-900"
+            className="min-h-[44px] w-full min-w-0 flex-1 text-sm text-neutral-600 file:mr-2 file:rounded-lg file:border file:border-neutral-300 file:bg-transparent file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-neutral-900 dark:text-neutral-400 dark:file:border-neutral-700 dark:file:text-neutral-100"
           />
           <button
             type="button"
             onClick={handleImport}
             disabled={!selectedFile || importing}
             aria-label="开始导入"
-            className="shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
+            className="shrink-0 self-center rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
           >
             {importing ? '导入中…' : '开始导入'}
           </button>
