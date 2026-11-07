@@ -85,6 +85,22 @@ describe('菜谱文件存储', () => {
     expect((await fs.readdir(dir)).filter(f => f.endsWith('.tmp'))).toEqual([])
   })
 
+  it('fresh 目录（不存在）直接 createRecipe 成功', async () => {
+    // data/ 不入库，全新部署首跑时目录不存在：写入前应自动创建，而非 ENOENT 500
+    const fresh = path.join(dir, 'nested', 'fresh-create')
+    await expect(fs.access(fresh)).rejects.toThrow() // 先断言目录确实不存在
+    const r = await createRecipe(goodDraft, fresh)
+    expect(await getRecipe(r.id, fresh)).toMatchObject({ name: '番茄炒蛋' })
+  })
+
+  it('fresh 目录直接 putRecipe 成功', async () => {
+    const fresh = path.join(dir, 'nested', 'fresh-put')
+    await expect(fs.access(fresh)).rejects.toThrow() // 先断言目录确实不存在
+    const full = makeRecipe('r-fresh-put', '凉拌黄瓜', ['凉菜'], ['黄瓜'])
+    await putRecipe(full, fresh)
+    expect(await getRecipe('r-fresh-put', fresh)).toEqual(full)
+  })
+
   it('update 刷新 updatedAt 且保留 id', async () => {
     const r = await createRecipe(goodDraft, dir)
     await new Promise(resolve => setTimeout(resolve, 5)) // 保证时间戳可区分

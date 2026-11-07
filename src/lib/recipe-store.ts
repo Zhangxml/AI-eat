@@ -26,10 +26,12 @@ async function readRecipeFile(file: string): Promise<Recipe | null> {
   }
 }
 
-// 原子写：先写 <目标>.tmp，再 rename 覆盖目标，失败时清理临时文件，不残留 .tmp
+// 原子写：先建目录（全新部署 data/ 不入库，首次写入时目录可能不存在），再写 <目标>.tmp，
+// rename 覆盖目标，失败时清理临时文件，不残留 .tmp。mkdir 收敛在此一处，三个写入函数自动全覆盖
 async function atomicWrite(file: string, data: string): Promise<void> {
   const tmp = `${file}.tmp`
   try {
+    await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(tmp, data, 'utf8')
     await fs.rename(tmp, file)
   } finally {
