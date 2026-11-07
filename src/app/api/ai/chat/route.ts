@@ -9,7 +9,7 @@
 // 实现说明：未用 TransformStream 而是手动泵上游 reader——闭合后的菜谱提取/重试（aiComplete）是异步工作，
 // 在 pump 循环结束后统一处理，比 transform/flush 同步回调里排异步任务更可控，且便于接入 request.signal 取消
 import { loadAiConfig, aiChatStream, aiComplete, type ChatMessage } from '@/lib/ai-client'
-import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, extractRecipeJson } from '@/lib/ai-prompts'
+import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, CHAT_MENU_FORMAT_RULE, extractRecipeJson, extractChatMenuJson } from '@/lib/ai-prompts'
 import { listRecipes } from '@/lib/recipe-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
@@ -44,6 +44,11 @@ async function parseInput(req: Request): Promise<ChatMessage[] | null> {
   return out
 }
 
+const OPEN_RECIPE = '<recipe>'
+const CLOSE_RECIPE = '</recipe>'
+const OPEN_MENU = '<menu>'
+const CLOSE_MENU = '</menu>'
+
 // 计算字符串尾部最长多少字符是 tag 的真前缀（用于跨上游增量边界的不完整标签扣留，防止 "<rec" 被误发正文）
 function partialTagLen(s: string, tag: string): number {
   const max = Math.min(s.length, tag.length - 1)
@@ -53,85 +58,100 @@ function partialTagLen(s: string, tag: string): number {
   return 0
 }
 
-// <recipe> 标签两态状态机（text | recipe）：
-// - text 态：增量即刻外发，但尾部可能是不完整 "<recipe>" 字面量的部分先扣留，等下个增量拼装后再判断
-// - recipe 态：标签内内容全部缓冲不外发（同样扣留不完整 "</recipe>" 尾部），闭合回调一次性上交缓冲
-// - 首个闭合后 recipeSeen=true：此后所有上游正文（含后续标签）一律丢弃，协议只发首个菜谱
+// 结构化标签流式状态机（text | recipe | menu）：
+// - text 态：增量即刻外发，但尾部可能是不完整 "<recipe>"/"<menu>" 字面量的部分先扣留，等下个增量拼装后再判断
+// - recipe/menu 态：标签内内容全部缓冲不外发（同样扣留不完整 "</recipe>"/"</menu>" 尾部），闭合回调一次性上交缓冲
+// - 首个任一类标签闭合后 structSeen=true：此后所有上游正文（含后续标签）一律丢弃，协议只发首个结构化输出
+//   （<recipe> → onRecipeComplete；<menu> → onMenuComplete，分别由调用方走各自解析/事件路径）
 class RecipeStreamSplitter {
-  private inRecipe = false
-  private recipeSeen = false
+  private inTag: 'recipe' | 'menu' | null = null
+  private structSeen = false
   private buf = ''
-  private recipeBuf = ''
-  // 流在 recipe 态中途结束时（flush 时）的残留缓冲快照，供 lastUnclosedRecipe 查询
+  private tagBuf = ''
+  // 流在标签态中途结束时（flush 时）的残留缓冲快照，供 lastUnclosedRecipe 查询
   private unclosed: string | null = null
 
-  constructor(private readonly onRecipeComplete: (content: string) => void) {}
+  constructor(
+    private readonly onRecipeComplete: (content: string) => void,
+    private readonly onMenuComplete: (content: string) => void,
+  ) {}
 
-  // 喂入一个上游增量；onText 在 text 态被逐段回调（仅 <recipe> 出现前的正文）
+  // 喂入一个上游增量；onText 在 text 态被逐段回调（仅结构化标签出现前的正文）
   feed(delta: string, onText: (chunk: string) => void): void {
     this.buf += delta
     while (true) {
-      if (!this.inRecipe) {
-        if (this.recipeSeen) {
-          // 首个菜谱已闭合：标签后的多余正文不再有意义，全部丢弃
+      if (this.inTag === null) {
+        if (this.structSeen) {
+          // 首个结构化输出已闭合：标签后的多余正文不再有意义，全部丢弃
           this.buf = ''
           break
         }
-        const i = this.buf.indexOf(OPEN_TAG)
-        if (i === -1) {
-          // 无完整开标签：扣留尾部半截标签字面量，其余外发
-          const keep = partialTagLen(this.buf, OPEN_TAG)
+        // 在两种开标签中取最先出现者（可能出现位置决定进入哪个标签态）
+        const ir = this.buf.indexOf(OPEN_RECIPE)
+        const im = this.buf.indexOf(OPEN_MENU)
+        const iOpen = ir === -1 ? im : im === -1 ? ir : Math.min(ir, im)
+        if (iOpen === -1) {
+          // 无完整开标签：扣留尾部最长半截标签字面量（两种开标签都可能构成），其余外发
+          const keep = Math.max(partialTagLen(this.buf, OPEN_RECIPE), partialTagLen(this.buf, OPEN_MENU))
           const out = this.buf.slice(0, this.buf.length - keep)
           if (out) onText(out)
           this.buf = this.buf.slice(this.buf.length - keep)
           break
         }
-        if (i > 0) onText(this.buf.slice(0, i))
-        this.buf = this.buf.slice(i + OPEN_TAG.length)
-        this.inRecipe = true
+        if (iOpen > 0) onText(this.buf.slice(0, iOpen))
+        this.inTag = this.buf.startsWith(OPEN_RECIPE, iOpen) ? 'recipe' : 'menu'
+        this.buf = this.buf.slice(iOpen + (this.inTag === 'recipe' ? OPEN_RECIPE.length : OPEN_MENU.length))
       } else {
-        const i = this.buf.indexOf(CLOSE_TAG)
+        const closeTag = this.inTag === 'recipe' ? CLOSE_RECIPE : CLOSE_MENU
+        const i = this.buf.indexOf(closeTag)
         if (i === -1) {
           // 无完整闭标签：内容入缓冲，尾部半截闭标签扣留待下个增量
-          const keep = partialTagLen(this.buf, CLOSE_TAG)
-          this.recipeBuf += this.buf.slice(0, this.buf.length - keep)
+          const keep = partialTagLen(this.buf, closeTag)
+          this.tagBuf += this.buf.slice(0, this.buf.length - keep)
           this.buf = this.buf.slice(this.buf.length - keep)
           break
         }
-        // 闭合：缓冲整体上交（由调用方 extractRecipeJson 决定发 recipe 还是 error），回到 text 态
-        this.recipeBuf += this.buf.slice(0, i)
-        this.buf = this.buf.slice(i + CLOSE_TAG.length)
-        this.inRecipe = false
-        this.recipeSeen = true
-        this.onRecipeComplete(this.recipeBuf)
-        this.recipeBuf = ''
+        // 闭合：缓冲整体上交（由调用方决定解析与事件），回到 text 态并标记已见结构化输出
+        this.tagBuf += this.buf.slice(0, i)
+        this.buf = this.buf.slice(i + closeTag.length)
+        this.inTag = null
+        this.structSeen = true
+        if (closeTag === CLOSE_RECIPE) this.onRecipeComplete(this.tagBuf)
+        else this.onMenuComplete(this.tagBuf)
+        this.tagBuf = ''
       }
     }
   }
 
-  // flush 后查询：流在 recipe 态中途结束时是否有未闭合缓冲（需走提取路径）；正常闭合流返回 null
-  lastUnclosedRecipe(): string | null {
-    return this.unclosed
+  // flush 后查询：流在标签态中途结束时是否有未闭合缓冲（需走提取路径）；正常闭合流返回 null。
+  // 附带闭合的标签类型，调用方据此选解析函数（<recipe> 未闭合走菜谱提取；<menu> 未闭合走清单提取）
+  lastUnclosedTag(): { kind: 'recipe' | 'menu'; content: string } | null {
+    if (this.unclosed === null) return null
+    return { kind: this.unclosedKind, content: this.unclosed }
   }
 
   // 上游结束时调用：冲刷扣留的半截标签文本（此时不可能再拼成完整标签）；
-  // 若流在 recipe 态中途结束（模型漏写 </recipe> 或上游截断），把残留缓冲当作闭合内容返回，
-  // 交由调用方走同一条 extractRecipeJson → 重试 → recipe/error 路径（裸 JSON 平衡扫描可解出未闭合但完整的 JSON）
-  flush(onText: (chunk: string) => void): string | null {
-    let unclosed: string | null = null
-    if (this.inRecipe) {
-      this.recipeBuf += this.buf
-      if (this.recipeBuf !== '') {
-        unclosed = this.recipeBuf
-        this.unclosed = this.recipeBuf
+  // 若流在标签态中途结束（模型漏写闭合标签或上游截断），把残留缓冲当作闭合内容返回快照，
+  // 交由调用方走同一条「提取 → 重试 → 事件」路径（裸 JSON 平衡扫描可解出未闭合但完整的 JSON）
+  flush(onText: (chunk: string) => void): { kind: 'recipe' | 'menu'; content: string } | null {
+    let unclosed: { kind: 'recipe' | 'menu'; content: string } | null = null
+    if (this.inTag !== null) {
+      this.tagBuf += this.buf
+      if (this.tagBuf !== '') {
+        this.unclosed = this.tagBuf
+        this.unclosedKind = this.inTag
+        unclosed = { kind: this.inTag, content: this.tagBuf }
       }
-    } else if (!this.recipeSeen && this.buf) {
+    } else if (!this.structSeen && this.buf) {
       onText(this.buf)
     }
     this.buf = ''
-    this.recipeBuf = ''
+    this.tagBuf = ''
     return unclosed
   }
+
+  // 未闭合缓冲的类型快照（lastUnclosedTag 用）
+  private unclosedKind: 'recipe' | 'menu' = 'recipe'
 }
 
 // 硬条件（同 Task 10）：AI 可能照抄提示词示例的 id/时间戳（r-1730000000-ab12cd 能过 strict schema 校验），
@@ -201,10 +221,14 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
-  // 系统消息 = 人设 + 库摘要 + <recipe> 格式规则（让模型知道结构化输出协议）；其后原样转发客户端 messages
+  // 系统消息 = 人设 + 库摘要 + 输出规则（<recipe> 菜谱格式 + <menu> 食材推荐清单格式，两态并存）；
+  // 其后原样转发客户端 messages
   const { recipes } = await listRecipes()
   const sent: ChatMessage[] = [
-    { role: 'system', content: [systemPromptWithLibrary(recipes), RECIPE_FORMAT_RULE].join('\n') },
+    {
+      role: 'system',
+      content: [systemPromptWithLibrary(recipes), RECIPE_FORMAT_RULE, CHAT_MENU_FORMAT_RULE].join('\n'),
+    },
     ...messages,
   ]
 
@@ -232,10 +256,23 @@ export async function POST(req: Request): Promise<Response> {
   if (req.signal.aborted) handleAbort()
   else req.signal.addEventListener('abort', handleAbort)
 
-  let recipeContent: string | null = null // 首个 </recipe> 闭合时捕获的标签内内容
-  const sm = new RecipeStreamSplitter(content => {
-    if (recipeContent === null) recipeContent = content
-  })
+  // 首个结构化标签闭合时捕获的内容与类型（recipe=完整菜谱 JSON / menu=推荐清单 JSON）
+  let closedContent: string | null = null
+  let closedKind: 'recipe' | 'menu' = 'recipe'
+  const sm = new RecipeStreamSplitter(
+    content => {
+      if (closedContent === null) {
+        closedContent = content
+        closedKind = 'recipe'
+      }
+    },
+    content => {
+      if (closedContent === null) {
+        closedContent = content
+        closedKind = 'menu'
+      }
+    },
+  )
 
   const out = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -258,23 +295,43 @@ export async function POST(req: Request): Promise<Response> {
           if (value) processUpstreamChunk(value, dec, lineBuf, sm, emit)
         }
         if (!clientGone) {
-          // 上游结束：冲刷正文残余（半截标签字面量）；流中途断在 recipe 态时拿回未闭合缓冲，走同一条提取路径
-          sm.flush(chunk => emit(sseEvent('message', { t: chunk })))
-          const pending = recipeContent ?? sm.lastUnclosedRecipe()
+          // 上游结束：冲刷正文残余（半截标签字面量）；流中途断在标签态时拿回未闭合缓冲与类型，走同一条提取路径
+          const flushUnclosed = sm.flush(chunk => emit(sseEvent('message', { t: chunk })))
+          const pending = closedContent
+            ? { kind: closedKind, content: closedContent }
+            : flushUnclosed
           if (pending !== null) {
-            // 标签闭合（或流截断残留）后提取菜谱；失败按 Task 10 模式重试一次，仍失败发 error（随后照常 done，不中断流）
-            let recipe = extractRecipeJson(pending)
-            if (!recipe) {
-              try {
-                recipe = extractRecipeJson(await aiComplete(cfg, buildRetryMessages(sent)))
-              } catch {
-                recipe = null
+            // 标签闭合（或流截断残留）后按类型提取；失败按公共模式重试一次，仍失败发 error（随后照常 done，不中断流）
+            if (pending.kind === 'menu') {
+              // <menu>：食材推荐清单（新协议）——解析失败重试一次（重试消息与首轮一致）
+              let menu = extractChatMenuJson(pending.content)
+              if (!menu) {
+                try {
+                  menu = extractChatMenuJson(await aiComplete(cfg, buildRetryMessages(sent)))
+                } catch {
+                  menu = null
+                }
               }
-            }
-            if (recipe) {
-              emit(sseEvent('recipe', finalizeRecipe(recipe)))
+              if (menu) {
+                emit(sseEvent('menu', menu))
+              } else {
+                emit(sseEvent('error', { error: 'AI 输出两次均无法解析为合法推荐清单' }))
+              }
             } else {
-              emit(sseEvent('error', { error: 'AI 输出两次均无法解析为合法菜谱' }))
+              // <recipe>：完整菜谱（原有路径）
+              let recipe = extractRecipeJson(pending.content)
+              if (!recipe) {
+                try {
+                  recipe = extractRecipeJson(await aiComplete(cfg, buildRetryMessages(sent)))
+                } catch {
+                  recipe = null
+                }
+              }
+              if (recipe) {
+                emit(sseEvent('recipe', finalizeRecipe(recipe)))
+              } else {
+                emit(sseEvent('error', { error: 'AI 输出两次均无法解析为合法菜谱' }))
+              }
             }
           }
           emit(sseEvent('done', {}))

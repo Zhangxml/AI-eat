@@ -365,4 +365,71 @@ describe('POST /api/ai/chat', () => {
     await new Promise(r => setTimeout(r, 20))
     expect(cancelled).toBe(true)
   })
+
+  // —— <menu> 食材推荐清单协议（两段式：清单确认后前端逐菜调 /api/ai/recipes）——
+
+  const upstreamMenu = (prefix = '好的，两样食材可以这样搭。'): string =>
+    deltaFrame(prefix) +
+    deltaFrame(
+      `<menu>{"dishes":[{"name":"番茄炒蛋","ingredient":"番茄","reason":"经典搭配"},{"name":"鸡蛋羹","ingredient":"鸡蛋","reason":"嫩滑易做"}]}</menu>`,
+    ) +
+    DONE_FRAME
+
+  it('食材推荐：<menu> 闭合 → menu 事件携带 dishes 数组（name/ingredient/reason 三字段）', async () => {
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamMenu()))
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: '有番茄和鸡蛋做什么' }] }))
+    expect(res.status).toBe(200)
+    const frames = parseSse(await res.text())
+    const menuFrame = frames.find(f => f.event === 'menu')
+    expect(menuFrame).toBeDefined()
+    const menu = menuFrame!.data as { dishes: { name: string; ingredient: string; reason: string }[] }
+    expect(menu.dishes).toHaveLength(2)
+    expect(menu.dishes[0]).toEqual({ name: '番茄炒蛋', ingredient: '番茄', reason: '经典搭配' })
+    // 清单路径不产生 recipe 事件，正常 done 收尾
+    expect(frames.some(f => f.event === 'recipe')).toBe(false)
+    expect(frames[frames.length - 1].event).toBe('done')
+  })
+
+  it('清单字段缺失（无 ingredient/reason）→ 重试一次 → 仍失败发 error 且 done 收尾', async () => {
+    // 第一次输出缺 ingredient 字段
+    aiChatStreamMock.mockResolvedValueOnce(
+      sseResponse(deltaFrame('<menu>{"dishes":[{"name":"x"}]}</menu>') + DONE_FRAME),
+    )
+    // 重试输出同样坏
+    aiCompleteMock.mockResolvedValueOnce('<menu>{"dishes":[{"name":"y"}]}</menu>')
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: '有番茄做什么' }] }))
+    const frames = parseSse(await res.text())
+    expect(frames.some(f => f.event === 'menu')).toBe(false)
+    const err = frames.find(f => f.event === 'error')
+    expect(err).toBeDefined()
+    expect((err!.data as { error: string }).error).toContain('推荐清单')
+    expect(frames[frames.length - 1].event).toBe('done')
+    expect(aiCompleteMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('<menu> 流中途截断（无闭合标签）→ flush 路径按 menu 类型提取，走重试后成功', async () => {
+    // 上游输出 menu 标签未闭合即结束（真实场景：模型漏写 </menu> 或上游截断）
+    aiChatStreamMock.mockResolvedValueOnce(
+      sseResponse(deltaFrame('<menu>{"dishes":[{"name":"番茄炒蛋","ingredient":"番茄","reason":"经典"}]}')),
+    )
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: '有番茄做什么' }] }))
+    const frames = parseSse(await res.text())
+    const menuFrame = frames.find(f => f.event === 'menu')
+    expect(menuFrame).toBeDefined()
+    expect((menuFrame!.data as { dishes: unknown[] }).dishes).toHaveLength(1)
+    expect(frames[frames.length - 1].event).toBe('done')
+  })
+
+  it('标签分流：<recipe> 在前 <menu> 在后 → 只发首个（recipe），menu 标签内容丢弃', async () => {
+    const raw =
+      deltaFrame('<recipe>' + JSON.stringify(aiRecipe) + '</recipe>') +
+      deltaFrame('<menu>{"dishes":[{"name":"x","ingredient":"y","reason":"z"}]}</menu>') +
+      DONE_FRAME
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(raw))
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    const frames = parseSse(await res.text())
+    expect(frames.filter(f => f.event === 'recipe')).toHaveLength(1)
+    expect(frames.some(f => f.event === 'menu')).toBe(false)
+    expect(frames[frames.length - 1].event).toBe('done')
+  })
 })

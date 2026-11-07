@@ -22,6 +22,58 @@ export function extractRecipeJson(text: string): Recipe | null {
   })
 }
 
+// 聊天内推荐清单 schema 与提取：{ dishes: [{ name, ingredient, reason }] }（zod 校验，轻量无步骤）。
+// 与买什么接口的 menuSchema 不同：无 category/shopping，多 ingredient（主角食材，与用户输入联动）。
+export interface ChatMenuDish {
+  name: string
+  ingredient: string
+  reason: string
+}
+
+export interface ChatMenu {
+  dishes: ChatMenuDish[]
+}
+
+// 提取 <menu>{JSON}</menu>（或裸 JSON/栅栏兜底）并校验；失败返回 null。
+// 复用 extractJson 的三形态候选（标签正则按 <menu> 字面量新起一组），逐段尝试首个可解析段。
+export function extractChatMenuJson(text: string): ChatMenu | null {
+  const candidates: string[] = []
+  const tagRe = /<menu>([\s\S]*?)<\/menu>/g
+  for (const m of text.matchAll(tagRe)) candidates.push(m[1])
+  // 栅栏与裸 JSON 兜底直接复用平衡扫描：从全文取所有顶层平衡段作为候选
+  let cursor = 0
+  while (true) {
+    const start = text.indexOf('{', cursor)
+    if (start === -1) break
+    const seg = balancedJsonSegment(text, cursor)
+    if (seg === null) break
+    candidates.push(seg)
+    cursor = start + seg.length
+  }
+  const dishShape = (v: unknown): ChatMenuDish | null => {
+    if (typeof v !== 'object' || v === null) return null
+    const o = v as Record<string, unknown>
+    if (typeof o.name !== 'string' || o.name.trim() === '') return null
+    if (typeof o.ingredient !== 'string' || o.ingredient.trim() === '') return null
+    if (typeof o.reason !== 'string' || o.reason.trim() === '') return null
+    return { name: o.name, ingredient: o.ingredient, reason: o.reason }
+  }
+  for (const seg of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(seg)
+      if (typeof parsed !== 'object' || parsed === null) continue
+      const dishesRaw = (parsed as Record<string, unknown>).dishes
+      if (!Array.isArray(dishesRaw) || dishesRaw.length === 0) continue
+      const dishes = dishesRaw.map(dishShape)
+      if (dishes.some(d => d === null)) continue
+      return { dishes: dishes as ChatMenuDish[] }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
 // 系统提示词：人设部分自拟（中文、AI 菜谱助手、鼓励优先推荐库中已有菜）+ 库摘要段
 export function systemPromptWithLibrary(recipes: Recipe[]): string {
   const lines: string[] = [
@@ -65,6 +117,20 @@ export const RECIPE_FORMAT_RULE = [
   '其中 "source" 恒为 "ai"；"nutrition.estimated" 恒为 true（营养均为估算值，非实测）。',
   '完整示例（番茄炒蛋）：',
   '<recipe>{"id":"r-1730000000-ab12cd","name":"番茄炒蛋","category":"荤菜","servings":2,"difficulty":"简单","totalTimeMin":20,"tags":["家常菜","快手菜"],"ingredients":[{"name":"番茄","amount":"2个（约300g）"},{"name":"鸡蛋","amount":"3个"}],"steps":["番茄切块……","热锅下油……"],"nutrition":{"caloriesKcal":180,"proteinG":8,"fatG":10,"carbG":12,"estimated":true},"source":"ai","createdAt":"2026-11-07T12:00:00.000Z","updatedAt":"2026-11-07T12:00:00.000Z"}</recipe>',
+].join('\n')
+
+// 聊天内食材推荐清单格式规则（chat 接口专用）：用户给出食材时输出 <menu> 清单而非直接生成完整菜谱。
+// 与买什么（/api/ai/menu）的区别：这边有食材输入——每道菜标注主角食材，dishes 数量与食材数量一致；
+// 那边无食材——按人数配一桌菜 + 采购清单。清单确认后由前端逐菜调 /api/ai/recipes 生成完整菜谱。
+export const CHAT_MENU_FORMAT_RULE = [
+  '回答规则：',
+  '- 当用户列出一种或多种食材、想用来做菜时：先用一两句话说明搭配思路，然后输出一个 <menu> 标签，',
+  '  标签内为 JSON（不要在 JSON 外再加其他文字），最后以 </menu> 结束。JSON 格式：',
+  '  {"dishes":[{"name":"<菜名>","ingredient":"<该菜主要使用的食材>","reason":"<推荐理由，一两句话>"}]}',
+  '  dishes 的数量与用户给出的食材数量一致：每道菜以一种食材为主角，一种食材对应一道菜。',
+  '  清单阶段不要生成完整菜谱（不要输出 <recipe> 标签），等用户确认想做哪道后再生成。',
+  '- 当用户询问烹饪知识、技巧、或与食材推荐无关的闲聊时：正常文字回答，不输出 <menu> 标签。',
+  '- 当用户明确要求生成某道菜的完整做法/菜谱时：正常输出 <recipe> 标签（按下方菜谱格式规则）。',
 ].join('\n')
 
 // 平衡花括号扫描：从 from 开始找第一个 {，逐字符（UTF-16 码元）扫描并统计嵌套深度，

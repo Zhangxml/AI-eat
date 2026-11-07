@@ -12,6 +12,7 @@ import { apiFetch } from '@/lib/api-fetch'
 import { readSse } from '@/lib/sse-client'
 import { buildHistory } from '@/lib/chat-history'
 import RecipeCard from '@/components/RecipeCard'
+import type { ChatMenu } from '@/lib/ai-prompts'
 import type { Recipe } from '@/lib/recipe-types'
 
 // 消息条目：文本气泡；recipe 对象不进 history（历史只含 user/assistant 文本）
@@ -19,7 +20,15 @@ interface ChatItem {
   role: 'user' | 'assistant'
   text: string
   recipe?: Recipe // assistant 消息可附挂一张菜谱卡片（气泡+卡片一体渲染）
+  menu?: ChatMenu // assistant 消息可附挂食材推荐清单（用户确认后逐菜生成完整菜谱）
   error?: string // 生成失败时 assistant 气泡内的红字提示
+}
+
+// 推荐清单中某道菜的逐菜状态：无记录=未生成；generating=生成中；recipe=已生成（挂卡片）
+interface MenuDishState {
+  phase: 'generating' | 'ready'
+  recipe?: Recipe
+  error?: string
 }
 
 // 入库请求体：DraftRecipe 形状（无 id/时间戳），destructure 剥离三字段，source 原样保留
@@ -62,6 +71,8 @@ export default function ChatView() {
   const [savedIds, setSavedIds] = useState<Record<string, boolean>>({})
   // 入库请求进行中的 id 集合：请求往返期间与 saved 一样禁用按钮（201 响应前双击不再二次发请求）
   const [savingIds, setSavingIds] = useState<Record<string, boolean>>({})
+  // 推荐清单逐菜状态：以「消息下标:菜名」为键（跨清单同名菜互不干扰），确认后逐菜生成完整菜谱
+  const [dishStates, setDishStates] = useState<Record<string, MenuDishState>>({})
   // 自动滚底：气泡区 ref，增量/卡片/错误到达时滚动到底
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -107,6 +118,37 @@ export default function ChatView() {
     }
   }
 
+  // 推荐清单逐菜生成：确认某道菜后调 /api/ai/recipes 生成完整菜谱（per-dish 独立状态互不阻塞）
+  async function generateDish(msgIdx: number, dishName: string) {
+    const key = `${msgIdx}:${dishName}`
+    const st = dishStates[key]
+    if (st && (st.phase === 'generating' || (st.phase === 'ready' && st.recipe))) return
+    setDishStates((prev) => ({ ...prev, [key]: { phase: 'generating' } }))
+    try {
+      const res = await apiFetch('/api/ai/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dish: dishName }),
+      })
+      if (res.ok) {
+        // /api/ai/recipes 200 为 { recipe } 包裹形状（与 /api/recipes 入库接口的裸 Recipe 不同）
+        const data = (await res.json()) as { recipe: Recipe }
+        setDishStates((prev) => ({ ...prev, [key]: { phase: 'ready', recipe: data.recipe } }))
+        return
+      }
+      let msg = `生成失败（HTTP ${res.status}）`
+      try {
+        const data = (await res.json()) as { error?: string }
+        if (typeof data?.error === 'string' && data.error !== '') msg = data.error
+      } catch {
+        // 保留默认文案
+      }
+      setDishStates((prev) => ({ ...prev, [key]: { phase: 'generating', error: msg } }))
+    } catch {
+      setDishStates((prev) => ({ ...prev, [key]: { phase: 'generating', error: '网络异常，请稍后重试' } }))
+    }
+  }
+
   // 发送：把完整对话历史（user/assistant 文本，不含 recipe 对象）作为 messages 交给后端
   async function handleSend() {
     const text = input.trim()
@@ -148,6 +190,9 @@ export default function ChatView() {
         } else if (event === 'recipe') {
           // 完整菜谱：挂到当前 assistant 消息下方（服务端已覆写 id/时间戳/source，原样使用不改对象）
           patch((it) => ({ ...it, recipe: data as Recipe }))
+        } else if (event === 'menu') {
+          // 食材推荐清单：挂到当前 assistant 消息下方（用户确认后逐菜生成完整菜谱）
+          patch((it) => ({ ...it, menu: data as ChatMenu }))
         } else if (event === 'error') {
           // 错误：红字显示在 assistant 气泡内（随后照常 done 收尾）
           const err = (data as { error?: unknown }).error
@@ -178,9 +223,9 @@ export default function ChatView() {
             <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">AI-eat</h1>
             <p className="mt-3 text-base text-neutral-600 dark:text-neutral-400">你的 AI 菜谱助手</p>
             <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-              说说冰箱里有什么，让 AI 推荐今天吃什么；
+              说说冰箱里有什么，AI 会按食材数量推荐几道菜；
               <br />
-              生成的菜谱可一键存入菜谱库。点「买什么」还能按人数配一桌菜加采购清单。
+              点某道菜的「生成菜谱」得到完整做法并存入菜谱库。没有食材？去「买什么」按人数配一桌菜。
             </p>
           </div>
         ) : (
@@ -209,6 +254,62 @@ export default function ChatView() {
                     saved={savedIds[it.recipe.id] ?? false}
                     saving={savingIds[it.recipe.id] ?? false}
                   />
+                )}
+                {/* menu 事件：食材推荐清单——每菜一行（主角食材+理由），确认后逐菜生成完整菜谱 */}
+                {it.menu && (
+                  <section
+                    aria-label="食材推荐清单"
+                    className="flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
+                  >
+                    <h3 className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                      推荐清单（{it.menu.dishes.length} 道），想做哪道点「生成菜谱」
+                    </h3>
+                    <ul className="flex flex-col gap-3">
+                      {it.menu.dishes.map((d, di) => {
+                        const key = `${i}:${d.name}`
+                        const st = dishStates[key]
+                        return (
+                          <li
+                            key={key}
+                            aria-label={`推荐菜：${d.name}`}
+                            className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-3 dark:border-neutral-800"
+                          >
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                              <span className="min-w-0 break-words text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                                {d.name}
+                              </span>
+                              <span className="shrink-0 rounded-full bg-neutral-200 px-2 py-0.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                                主角：{d.ingredient}
+                              </span>
+                            </div>
+                            <p className="min-w-0 break-words text-sm leading-6 text-neutral-600 dark:text-neutral-400">
+                              {d.reason}
+                            </p>
+                            {/* 逐菜失败局部红字，不阻塞其他菜 */}
+                            {st?.error && <p className="text-sm text-red-500 dark:text-red-400">{st.error}</p>}
+                            {st?.phase === 'ready' && st.recipe ? (
+                              <RecipeCard
+                                recipe={st.recipe}
+                                onSave={() => void saveRecipe(st.recipe!)}
+                                saved={savedIds[st.recipe.id] ?? false}
+                                saving={savingIds[st.recipe.id] ?? false}
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => void generateDish(i, d.name)}
+                                disabled={st?.phase === 'generating'}
+                                aria-label={`生成菜谱：${d.name}`}
+                                className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-white text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-800 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-500"
+                              >
+                                {st?.phase === 'generating' ? '生成中…' : '生成菜谱'}
+                              </button>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </section>
                 )}
               </div>
             ))}
