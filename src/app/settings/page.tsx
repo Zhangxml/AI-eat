@@ -209,7 +209,7 @@ export default function SettingsPage() {
           <p className="text-sm text-neutral-600">
             未配置。请在服务器环境变量设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 后重启。
           </p>
-          ) : (
+        ) : (
           <div className="flex flex-col gap-1 text-sm">
             <p className="break-words text-neutral-600">
               接口地址：<span className="break-all text-neutral-900">{config.baseUrl}</span>
