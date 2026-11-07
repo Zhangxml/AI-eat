@@ -161,7 +161,7 @@ export default function SettingsPage() {
             accept=".json,application/json"
             onChange={handleFileChange}
             aria-label="选择备份文件"
-            className="min-h-[44px] w-full min-w-0 flex-1 text-sm text-neutral-600 file:mr-2 file:min-h-[44px] file:flex-none file:rounded-lg file:border-0 file:bg-neutral-900 file:px-3 file:text-base file:font-medium file:text-white dark:text-neutral-400 dark:file:bg-neutral-100 dark:file:text-neutral-900"
+            className="min-h-[44px] w-full min-w-0 flex-1 text-sm text-neutral-600 file:mr-2 file:rounded-lg file:border-0 file:bg-neutral-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white dark:text-neutral-400 dark:file:bg-neutral-100 dark:file:text-neutral-900"
           />
           <button
             type="button"

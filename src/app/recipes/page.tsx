@@ -106,7 +106,7 @@ export default function RecipesPage() {
               key={t}
               type="button"
               onClick={() => setTag((prev) => (prev === t ? null : t))}
-              className={`min-h-[44px] rounded-full border px-3 text-sm transition-colors ${
+              className={`rounded-full border px-3 py-1 text-sm transition-colors ${
                 tag === t
                   ? 'border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900'
                   : 'border-neutral-300 bg-white text-neutral-600 active:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:active:bg-neutral-800'
