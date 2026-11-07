@@ -180,7 +180,7 @@ export default function ChatView() {
             <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
               说说冰箱里有什么，让 AI 推荐今天吃什么；
               <br />
-              生成的菜谱可一键存入菜谱库。
+              生成的菜谱可一键存入菜谱库。点「买什么」还能按人数配一桌菜加采购清单。
             </p>
           </div>
         ) : (

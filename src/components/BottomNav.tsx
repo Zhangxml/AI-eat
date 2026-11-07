@@ -6,9 +6,9 @@ import { usePathname } from 'next/navigation'
 
 // 导航项数据：顺序即展示顺序，href 需与 App Router 路由一一对应
 export const NAV_ITEMS: { href: string; label: string }[] = [
-  { href: '/', label: '首页' },
+  { href: '/', label: '问问AI' },
   { href: '/recipes', label: '菜谱库' },
-  { href: '/dishes', label: '点菜' },
+  { href: '/dishes', label: '买什么' },
   { href: '/settings', label: '设置' },
 ]
 
