@@ -118,6 +118,35 @@ describe('菜谱文件存储', () => {
     await expect(updateRecipe('r-none', goodDraft, dir)).resolves.toBeNull()
   })
 
+  it('id 白名单：路径穿越 id 被拦截——getRecipe/updateRecipe 返回 null 且不触碰越界文件', async () => {
+    // 越界目标：store 目录外层放一份「合法菜谱」金丝雀（若守卫生效则绝不可被读到/覆写）；
+    // 用合法菜谱而非任意 JSON，确保 RED 阶段无守卫时真的读得回来（package.json 会被 schema 拒掉，测不出真红）
+    const root = await fs.mkdtemp('/tmp/opencode/ai-eat-trav-')
+    try {
+      const store = path.join(root, 'store')
+      const outside = makeRecipe('r-outside', '越界菜谱', ['其他'], ['土豆'])
+      await fs.writeFile(path.join(root, 'outside.json'), JSON.stringify(outside), 'utf8')
+      await expect(getRecipe('../outside', store)).resolves.toBeNull()
+      await expect(updateRecipe('../outside', goodDraft, store)).resolves.toBeNull()
+      // 越界文件原样：既未被读到（内容未被改写），也未被 update 覆写
+      await expect(fs.readFile(path.join(root, 'outside.json'), 'utf8')).resolves.toBe(JSON.stringify(outside))
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('id 白名单：deleteRecipe 拒绝穿越 id，项目根 package.json 不被误删', async () => {
+    // 真实攻击面：默认目录 <cwd>/data/recipes 下 '../../package' 恰好指向项目根 package.json
+    await expect(deleteRecipe('../../package')).resolves.toBe(false)
+    const pkg = JSON.parse(await fs.readFile(path.join(process.cwd(), 'package.json'), 'utf8')) as { name: string }
+    expect(pkg.name).toBe('ai-eat')
+  })
+
+  it('id 白名单：putRecipe 对穿越 id 抛错（不静默吞掉，让备份导入计入 invalidIds）', async () => {
+    const evil = makeRecipe('../evil', '穿越菜谱', ['其他'], ['土豆'])
+    await expect(putRecipe(evil, dir)).rejects.toThrow('非法的菜谱 id')
+  })
+
   it('delete 返回 true，二次 delete 返回 false', async () => {
     const r = await createRecipe(goodDraft, dir)
     await expect(deleteRecipe(r.id, dir)).resolves.toBe(true)

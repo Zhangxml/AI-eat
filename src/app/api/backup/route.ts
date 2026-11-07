@@ -51,7 +51,8 @@ interface ItemResult {
 }
 
 // 导入单条：validateRecipe（strict schema）不过 → invalid；
-// id 取不到（非法条目无 id 可报）→ 用 #<数组序号> 占位；库中已有同 id → duplicate
+// id 取不到（非法条目无 id 可报）→ 用 #<数组序号> 占位；库中已有同 id → duplicate；
+// putRecipe 对穿越 id throw（store 层白名单守卫）→ 捕获计为 invalid，不中断整体导入
 async function importOne(item: unknown, index: number): Promise<ItemResult> {
   const recipe: Recipe | null = validateRecipe(item)
   if (!recipe) {
@@ -63,7 +64,11 @@ async function importOne(item: unknown, index: number): Promise<ItemResult> {
   if (existing) {
     return { imported: false, skipId: recipe.id, reason: 'duplicate' }
   }
-  await putRecipe(recipe)
+  try {
+    await putRecipe(recipe)
+  } catch {
+    return { imported: false, skipId: recipe.id, reason: 'invalid' }
+  }
   return { imported: true, skipId: null, reason: null }
 }
 

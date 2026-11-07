@@ -3,6 +3,7 @@
 // Task 16 起本接口受守卫保护：PASSWORD 未设时放行（本文件不带 Cookie 直调）；若设 PASSWORD 须带会话 Cookie
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { GET, POST } from './route'
 import { getRecipe, putRecipe } from '@/lib/recipe-store'
 import type { Recipe } from '@/lib/recipe-types'
@@ -128,6 +129,26 @@ describe('备份接口 /api/backup', () => {
     expect(body.skipped).toBe(body.skippedIds.length + body.invalidIds.length)
     // 合法条目不受非法条目影响，照常入库
     expect(await getRecipe(otherRecipe.id)).toEqual(otherRecipe)
+  })
+
+  it('POST 单条 schema 合法但 id 非法：putRecipe 抛错被捕获，计入 invalidIds，不 500', async () => {
+    // 手改备份文件可能带穿越 id（schema 只约束 min(1) 拦不住）：store 层 putRecipe throw，
+    // importOne 必须捕获单条异常计入 invalid 分支，其余条目照常导入（I-1 衔接面）
+    // 数据目录改用本用例专属嵌套路径：'../evil' 的越界落点 = dir/evil.json，作用域封闭可断言
+    const nested = path.join(dir, 'nested-store')
+    process.env.AI_EAT_DATA_DIR = nested
+    const evilId: Recipe = { ...otherRecipe, id: '../evil' }
+    const res = await POST(jsonReq({ recipes: [evilId, baseRecipe] }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ imported: 1, skipped: 1 })
+    expect(body.invalidIds).toEqual(['../evil'])
+    // 合法条目不受影响（落在嵌套 store 目录）
+    expect(await getRecipe(baseRecipe.id)).toEqual(baseRecipe)
+    // 越界落点（dir/evil.json）没有文件
+    await expect(fs.access(path.join(dir, 'evil.json'))).rejects.toThrow()
+    // 嵌套 store 目录里只有合法条目一个文件
+    expect((await fs.readdir(nested)).sort()).toEqual([`${baseRecipe.id}.json`])
   })
 
   it('POST 非法结构 → 400 + 中文 error（缺 recipes / recipes 非数组 / 非法 JSON）', async () => {

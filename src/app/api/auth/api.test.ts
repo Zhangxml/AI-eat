@@ -60,6 +60,14 @@ describe('/api/auth', () => {
     expect(SESSION_COOKIE).toBe('ai-eat-session')
   })
 
+  it('缺失 x-forwarded-proto 头（纯 HTTP 直连默认路径）→ Set-Cookie 不含 Secure', async () => {
+    // post() 默认不带该头：无代理头时绝不发 Secure，局域网 HTTP 直连不被卡死（LibreTV 坑回归面，
+    // 锁定「不许改从 req.url 推导」之外的另一侧：默认路径必须无 Secure）
+    const res = await POST(post({ password: 'p' }))
+    const cookie = parseSetCookie(res.headers.get('set-cookie') as string)
+    expect(cookie.attrs).not.toContain('Secure')
+  })
+
   it('错误密码 → 401 { error } 中文', async () => {
     const res = await POST(post({ password: 'wrong' }))
     expect(res.status).toBe(401)

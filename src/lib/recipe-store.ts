@@ -66,8 +66,15 @@ export async function listRecipes(
   return { recipes, invalidFiles }
 }
 
-// 按 id 取单个菜谱；文件不存在或内容非法返回 null
+// id 白名单守卫（单一事实来源，四个按 id 拼路径的入口共用）：
+// id 仅允许字母/数字/下划线/连字符，杜绝 `..%2F..%2Fpackage` 类路径穿越越出数据目录
+export function isSafeId(id: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(id)
+}
+
+// 按 id 取单个菜谱；文件不存在、非法 id 或内容非法返回 null
 export async function getRecipe(id: string, dir: string = recipesDir()): Promise<Recipe | null> {
+  if (!isSafeId(id)) return null
   return readRecipeFile(path.join(dir, `${id}.json`))
 }
 
@@ -85,6 +92,7 @@ export async function updateRecipe(
   draft: DraftRecipe,
   dir: string = recipesDir(),
 ): Promise<Recipe | null> {
+  if (!isSafeId(id)) return null
   const existing = await getRecipe(id, dir)
   if (!existing) return null
   const recipe: Recipe = {
@@ -97,8 +105,9 @@ export async function updateRecipe(
   return recipe
 }
 
-// 删除：成功返回 true；文件不存在返回 false
+// 删除：成功返回 true；文件不存在或非法 id 返回 false
 export async function deleteRecipe(id: string, dir: string = recipesDir()): Promise<boolean> {
+  if (!isSafeId(id)) return false
   try {
     await fs.unlink(path.join(dir, `${id}.json`))
     return true
@@ -108,7 +117,9 @@ export async function deleteRecipe(id: string, dir: string = recipesDir()): Prom
 }
 
 // 按原 id 直接写入完整菜谱（供备份导入，不改动 id 与时间戳）
+// 非法 id 直接 throw（不静默返回）：备份导入侧靠捕获该异常把该条计入 invalidIds
 export async function putRecipe(recipe: Recipe, dir: string = recipesDir()): Promise<void> {
+  if (!isSafeId(recipe.id)) throw new Error('非法的菜谱 id')
   await atomicWrite(path.join(dir, `${recipe.id}.json`), JSON.stringify(recipe, null, 2))
 }
 
