@@ -1,0 +1,23 @@
+# AI-eat 编排：宿主机 8080 → 容器 3000，数据落宿主机 ./data，配置读 .env
+services:
+  ai-eat:
+    build: .
+    container_name: ai-eat
+    ports:
+      - "8080:3000"
+    volumes:
+      # 菜谱数据持久化：容器内 /app/data ↔ 宿主机 ./data
+      # AI_EAT_DATA_DIR=/app/data/recipes 与 recipesDir() 默认 <cwd>/data/recipes（cwd=/app）路径一致
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      # 五个变量显式透传：${VAR:-默认} 由 compose 解析（自动读同目录 .env），shell 环境变量可覆盖
+      # 值为空字符串等价未配置（代码侧 Boolean('') 为 false），不影响 AI 未配置的降级行为
+      - AI_BASE_URL=${AI_BASE_URL:-}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_MODEL=${AI_MODEL:-}
+      - PASSWORD=${PASSWORD:-}
+      # 数据目录固定指向挂载点内的 recipes 子目录，保证容器写文件直接落到宿主机 ./data/recipes/
+      - AI_EAT_DATA_DIR=/app/data/recipes
+    restart: unless-stopped

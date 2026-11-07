@@ -1,0 +1,15 @@
+# 构建镜像时排除本地产物与敏感文件：node_modules/.next 由容器内 npm ci/npm run build 重新生成；
+# .env 与 data 绝不进镜像（.env 是密钥，data 由运行时 volume 挂载）
+node_modules
+.next
+.git
+data
+.env
+.env.*
+!.env.example
+ai-eat.log
+.ai-eat.pid
+*.tsbuildinfo
+.superpowers
+docs
+README.md

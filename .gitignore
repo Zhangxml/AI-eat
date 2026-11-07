@@ -38,6 +38,10 @@ yarn-error.log*
 # 运行期数据目录（AI_EAT_DATA_DIR 约定的默认数据落盘位置）
 data/
 
+# 裸机部署运行期产物（run.sh）
+ai-eat.log
+.ai-eat.pid
+
 # SDD 过程目录，不纳入版本控制
 .superpowers/
 
