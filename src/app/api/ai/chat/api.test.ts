@@ -1,0 +1,368 @@
+// POST /api/ai/chat SSE 聊天接口集成测试（Task 11）：
+// - vi.mock 掉 @/lib/ai-client：aiChatStream 返回拼好的上游 OpenAI SSE ReadableStream（原始 Response 形态）；aiComplete 可控返回（重试用）
+// - vi.mock 掉 @/lib/recipe-store 的 listRecipes / createRecipe（createRecipe 一旦被调即抛错，锁死「接口不写盘」）
+// - loadAiConfig 保持真实实现，走 process.env 真实路径测 503
+// 断言方式：await POST(req) 后 await res.text() 拿全部 SSE 帧，解析事件序列逐一断言
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { promises as fs } from 'node:fs'
+
+vi.mock('@/lib/ai-client', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/ai-client')>()
+  return { ...actual, aiChatStream: vi.fn(), aiComplete: vi.fn() }
+})
+vi.mock('@/lib/recipe-store', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/recipe-store')>()
+  return { ...actual, listRecipes: vi.fn(), createRecipe: vi.fn() }
+})
+
+import { POST } from './route'
+import { aiChatStream, aiComplete, type ChatMessage } from '@/lib/ai-client'
+import { listRecipes, createRecipe } from '@/lib/recipe-store'
+import type { Recipe } from '@/lib/recipe-types'
+
+const aiChatStreamMock = vi.mocked(aiChatStream)
+const aiCompleteMock = vi.mocked(aiComplete)
+const listRecipesMock = vi.mocked(listRecipes)
+const createRecipeMock = vi.mocked(createRecipe)
+
+// AI 输出夹具：完整合法菜谱，但 id 照抄提示词示例（r-1730000000-ab12cd，可过 strict schema）、
+// 时间戳给 2020 年旧值——用于锁定「recipe 事件数据必须无条件覆写 id/createdAt/updatedAt」的硬条件
+const aiRecipe: Recipe = {
+  id: 'r-1730000000-ab12cd',
+  name: '番茄炒蛋',
+  category: '荤菜',
+  servings: 2,
+  difficulty: '简单',
+  totalTimeMin: 20,
+  tags: ['家常菜', '快手菜'],
+  ingredients: [
+    { name: '番茄', amount: '2个' },
+    { name: '鸡蛋', amount: '3个' },
+  ],
+  steps: ['番茄切块', '热锅下油炒蛋', '下番茄翻炒调味'],
+  nutrition: { caloriesKcal: 180, proteinG: 8, fatG: 10, carbG: 12, estimated: true },
+  source: 'ai',
+  createdAt: '2020-01-01T00:00:00.000Z',
+  updatedAt: '2020-01-01T00:00:00.000Z',
+}
+
+// —— 上游 OpenAI SSE 构造工具 ——
+// 单个上游增量帧：OpenAI 格式 data: {choices:[{delta:{content}}]}
+const deltaFrame = (content: string): string =>
+  `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`
+// 上游结束帧
+const DONE_FRAME = 'data: [DONE]\n\n'
+// 把上游 SSE 文本包成 Response（aiChatStream 的原始返回形态）
+const sseResponse = (raw: string): Response =>
+  new Response(
+    new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(raw))
+        c.close()
+      },
+    }),
+  )
+
+// 构造一次聊天输入对应的完整上游输出：标签前正文 + <recipe>JSON</recipe> + [DONE]
+const upstreamFor = (recipe: Recipe, prefix = '好的，给您推荐番茄炒蛋。'): string =>
+  deltaFrame(prefix) + deltaFrame(`<recipe>${JSON.stringify(recipe)}</recipe>`) + DONE_FRAME
+
+// 构造带 JSON body 的 POST 请求
+const jsonReq = (body: unknown) =>
+  new Request('http://x/api/ai/chat', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json' },
+  })
+
+// 解析服务端 SSE 文本为事件序列 [{event, data}]；data 为原始 JSON.parse 结果（解析失败的帧记为字符串）
+interface SseFrame {
+  event: string
+  data: unknown
+}
+function parseSse(text: string): SseFrame[] {
+  const frames: SseFrame[] = []
+  for (const block of text.split('\n\n')) {
+    if (block.trim() === '') continue
+    let event = 'message'
+    let dataRaw = ''
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event: ')) event = line.slice(7)
+      else if (line.startsWith('data: ')) dataRaw = line.slice(6)
+    }
+    try {
+      frames.push({ event, data: JSON.parse(dataRaw) })
+    } catch {
+      frames.push({ event, data: dataRaw })
+    }
+  }
+  return frames
+}
+
+// 需要接管并在 afterEach 恢复的环境变量
+const ENV_KEYS = ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_EAT_DATA_DIR'] as const
+
+describe('POST /api/ai/chat', () => {
+  let dir: string
+  let savedEnv: Record<string, string | undefined>
+
+  beforeEach(async () => {
+    savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
+    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-chat-api-')
+    process.env.AI_EAT_DATA_DIR = dir
+    // AI 配置默认给全（真实 loadAiConfig 可通过）；503 用例里再清空
+    process.env.AI_BASE_URL = 'https://api.example.com'
+    process.env.AI_API_KEY = 'sk-test'
+    process.env.AI_MODEL = 'test-model'
+    aiChatStreamMock.mockReset()
+    aiCompleteMock.mockReset()
+    // createRecipe 一旦被调即抛错：接口若误写盘，测试会以该错误响亮失败
+    createRecipeMock.mockReset().mockRejectedValue(new Error('测试失败：接口不应写盘'))
+    listRecipesMock.mockReset().mockResolvedValue({ recipes: [], invalidFiles: [] })
+  })
+
+  afterEach(async () => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('正文以 message 事件流出：<recipe> 前的增量原样转发，标签内内容不泄漏', async () => {
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: '今天吃什么' }] }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('text/event-stream')
+
+    const frames = parseSse(await res.text())
+    const messages = frames.filter(f => f.event === 'message')
+    // 正文完整送达（按序拼接）
+    const joined = messages.map(f => (f.data as { t: string }).t).join('')
+    expect(joined).toBe('好的，给您推荐番茄炒蛋。')
+    // 标签内的 JSON 片段绝不出现在任何 message 增量里
+    expect(joined).not.toContain('"name"')
+    expect(joined).not.toContain('r-1730000000-ab12cd')
+    // 服务端注入了库摘要系统消息（首位 system，含人设）后才调上游
+    expect(aiChatStreamMock).toHaveBeenCalledTimes(1)
+    const sent = aiChatStreamMock.mock.calls[0][1] as ChatMessage[]
+    expect(sent[0].role).toBe('system')
+    expect(sent[0].content.length).toBeGreaterThan(0)
+    expect(sent.slice(1)).toEqual([{ role: 'user', content: '今天吃什么' }])
+  })
+
+  it('菜谱以 recipe 事件完整送达：parse 后 name 正确且 id/时间戳/source 被无条件覆写', async () => {
+    listRecipesMock.mockResolvedValue({ recipes: [{ ...aiRecipe }], invalidFiles: [] })
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: '推荐个菜' }] }))
+    const frames = parseSse(await res.text())
+    const recipeFrames = frames.filter(f => f.event === 'recipe')
+    expect(recipeFrames).toHaveLength(1)
+    const recipe = recipeFrames[0].data as {
+      id: string
+      name: string
+      source: string
+      createdAt: string
+      updatedAt: string
+    }
+    expect(recipe.name).toBe('番茄炒蛋')
+    // 硬条件：AI 照抄示例 id / 旧时间戳必须被无条件替换，source 恒 ai
+    expect(recipe.id).not.toBe('r-1730000000-ab12cd')
+    expect(recipe.id).toMatch(/^r-\d+-[0-9a-f]{6}$/)
+    expect(recipe.createdAt).not.toBe('2020-01-01T00:00:00.000Z')
+    expect(recipe.createdAt).toBe(recipe.updatedAt)
+    expect(Number.isNaN(Date.parse(recipe.createdAt))).toBe(false)
+    expect(recipe.source).toBe('ai')
+    // 接口不写盘
+    expect(createRecipeMock).not.toHaveBeenCalled()
+    expect(await fs.readdir(dir)).toEqual([])
+  })
+
+  it('系统消息注入库摘要：systemPromptWithLibrary(recipes) 出现在发给上游的 system 消息中', async () => {
+    listRecipesMock.mockResolvedValue({ recipes: [{ ...aiRecipe }], invalidFiles: [] })
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
+    await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    const sent = aiChatStreamMock.mock.calls[0][1] as ChatMessage[]
+    expect(sent[0].role).toBe('system')
+    expect(sent[0].content).toContain('番茄炒蛋｜食材:番茄,鸡蛋')
+    expect(sent[0].content).toContain('中餐家常菜 AI 菜谱助手')
+  })
+
+  it('以 done 事件收尾：最后一个事件为 done 且 data 为空对象，事件顺序 message→recipe→done', async () => {
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    const frames = parseSse(await res.text())
+    expect(frames.map(f => f.event)).toEqual(['message', 'recipe', 'done'])
+    const last = frames[frames.length - 1]
+    expect(last.event).toBe('done')
+    expect(last.data).toEqual({})
+  })
+
+  it('标签跨多个上游增量到达也能正确缓冲（分片不泄漏、不误发）', async () => {
+    // 把 <recipe>...JSON...</recipe> 拆成多个 delta 增量帧
+    const raw =
+      deltaFrame('这是介绍。') +
+      deltaFrame('<rec') +
+      deltaFrame('ipe>') +
+      deltaFrame(JSON.stringify(aiRecipe).slice(0, 40)) +
+      deltaFrame(JSON.stringify(aiRecipe).slice(40)) +
+      deltaFrame('</recipe>') +
+      deltaFrame('标签后的多余文本') +
+      DONE_FRAME
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(raw))
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    const frames = parseSse(await res.text())
+    expect(frames.map(f => f.event)).toEqual(['message', 'recipe', 'done'])
+    // message 只有标签前文本；recipe JSON 完整可解；标签后多余文本不外发
+    expect((frames[0].data as { t: string }).t).toBe('这是介绍。')
+    expect((frames[1].data as { name: string }).name).toBe('番茄炒蛋')
+  })
+
+  it('纯对话无 <recipe> 标签：只有 message+done，不触发菜谱提取与重试', async () => {
+    aiChatStreamMock.mockResolvedValueOnce(
+      sseResponse(deltaFrame('今天可以') + deltaFrame('试试番茄炒蛋。') + DONE_FRAME),
+    )
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: '今晚吃什么' }] }))
+    const frames = parseSse(await res.text())
+    expect(frames.map(f => f.event)).toEqual(['message', 'message', 'done'])
+    expect(frames.map(f => (f.data as { t: string }).t).join('')).toBe('今天可以试试番茄炒蛋。')
+    // 纯对话不应触发补全重试
+    expect(aiCompleteMock).not.toHaveBeenCalled()
+  })
+
+  it('上游流在 </recipe> 前截断（模型漏写闭合标签）：残留缓冲仍走提取→重试→error 路径，且正文不泄漏', async () => {
+    aiChatStreamMock.mockResolvedValueOnce(
+      // 截断在 JSON 中途（缺少部分字段与结尾括号）：平衡扫描无法解出，必须走重试
+      sseResponse(deltaFrame('介绍') + deltaFrame('<recipe>' + JSON.stringify(aiRecipe).slice(0, 80)) + DONE_FRAME),
+    )
+    aiCompleteMock.mockResolvedValueOnce('重试依然不是 JSON')
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    const frames = parseSse(await res.text())
+    // 未闭合缓冲提取失败（JSON 未闭合无法 parse）→ 重试 → 仍失败 → error + done
+    expect(frames.map(f => f.event)).toEqual(['message', 'error', 'done'])
+    // 缓冲中的 JSON 片段绝不能泄漏进 message 正文
+    const joined = frames.filter(f => f.event === 'message').map(f => (f.data as { t: string }).t).join('')
+    expect(joined).toBe('介绍')
+    expect(joined).not.toContain('番茄炒蛋')
+    expect(aiCompleteMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('菜谱解析失败重试一次（aiComplete），成功则补发 recipe 事件', async () => {
+    // 上游只输出了坏的标签段（无合法 JSON）
+    aiChatStreamMock.mockResolvedValueOnce(
+      sseResponse(deltaFrame('介绍') + deltaFrame('<recipe>坏的</recipe>') + DONE_FRAME),
+    )
+    // 重试 aiComplete 返回合法输出（extractRecipeJson 可解的三形态之一）
+    aiCompleteMock.mockResolvedValueOnce(`<recipe>${JSON.stringify(aiRecipe)}</recipe>`)
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    const frames = parseSse(await res.text())
+    expect(frames.map(f => f.event)).toEqual(['message', 'recipe', 'done'])
+    expect((frames[1].data as { name: string }).name).toBe('番茄炒蛋')
+    // 重试提示词模式与 Task 10 一致：原消息 + 重试提示，aiComplete 恰好被调一次
+    expect(aiCompleteMock).toHaveBeenCalledTimes(1)
+    const [sysMsg, retryMsg] = aiCompleteMock.mock.calls[0][1]
+    expect(sysMsg.role).toBe('system')
+    expect(retryMsg.role).toBe('user')
+    expect(retryMsg.content).toContain('上次输出无法解析，请严格按格式重发')
+    // 重试成功的 recipe 同样覆写 id
+    expect((frames[1].data as { id: string }).id).not.toBe('r-1730000000-ab12cd')
+  })
+
+  it('菜谱解析失败重试一次，仍失败发 error 事件（中文）且流照常 done 收尾', async () => {
+    aiChatStreamMock.mockResolvedValueOnce(
+      sseResponse(deltaFrame('介绍') + deltaFrame('<recipe>坏的</recipe>') + DONE_FRAME),
+    )
+    aiCompleteMock.mockResolvedValueOnce('重试后依然不是 JSON')
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    expect(res.status).toBe(200)
+    const frames = parseSse(await res.text())
+    expect(frames.map(f => f.event)).toEqual(['message', 'error', 'done'])
+    const errFrame = frames[1]
+    expect(((errFrame.data as { error: string }).error)).toMatch(/无法解析/)
+    expect(frames[frames.length - 1].data).toEqual({})
+    expect(aiCompleteMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('AI 未配置返回 503 JSON（非 SSE），不触发上游调用', async () => {
+    delete process.env.AI_BASE_URL
+    delete process.env.AI_API_KEY
+    delete process.env.AI_MODEL
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    expect(res.status).toBe(503)
+    expect(res.headers.get('content-type')).not.toBe('text/event-stream')
+    expect(((await res.json()) as { error: string }).error).toMatch(/AI 配置缺失/)
+    expect(aiChatStreamMock).not.toHaveBeenCalled()
+  })
+
+  it('body 缺 messages / messages 非数组 / 空数组 → 400，不触发任何 AI 调用', async () => {
+    for (const body of [{}, { messages: 'x' }, { messages: [] }]) {
+      const res = await POST(jsonReq(body))
+      expect(res.status, `body=${JSON.stringify(body)}`).toBe(400)
+      expect(((await res.json()) as { error: string }).error).toMatch(/messages|参数/)
+    }
+    expect(aiChatStreamMock).not.toHaveBeenCalled()
+    expect(aiCompleteMock).not.toHaveBeenCalled()
+  })
+
+  it('非 JSON body → 400', async () => {
+    const bad = await POST(
+      new Request('http://x/api/ai/chat', {
+        method: 'POST',
+        body: 'not-json',
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    expect(bad.status).toBe(400)
+  })
+
+  it('消息项非法（role/content 缺失或类型错）→ 400', async () => {
+    const badBodies: unknown[] = [
+      { messages: [{ content: '缺 role' }] },
+      { messages: [{ role: 'user' }] },
+      { messages: [{ role: 'robot', content: 'x' }] },
+      { messages: [{ role: 'user', content: 123 }] },
+      { messages: ['字符串项'] },
+    ]
+    for (const body of badBodies) {
+      const res = await POST(jsonReq(body))
+      expect(res.status, `body=${JSON.stringify(body)}`).toBe(400)
+    }
+    expect(aiChatStreamMock).not.toHaveBeenCalled()
+  })
+
+  it('上游非 2xx（aiChatStream throw）→ 502 JSON（非 SSE）', async () => {
+    aiChatStreamMock.mockRejectedValueOnce(new Error('AI 上游请求失败：HTTP 500'))
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+    expect(res.status).toBe(502)
+    expect(res.headers.get('content-type')).not.toBe('text/event-stream')
+    expect(((await res.json()) as { error: string }).error).toContain('AI 上游请求失败：HTTP 500')
+  })
+
+  it('客户端断开（request.signal abort）→ 上游 reader 取消，无悬挂连接', async () => {
+    let cancelled = false
+    const stream = new ReadableStream({
+      start() {
+        // 不 enqueue 不 close：模拟上游长连接
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    aiChatStreamMock.mockResolvedValueOnce(new Response(stream))
+    const controller = new AbortController()
+    const req = new Request('http://x/api/ai/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+      headers: { 'content-type': 'application/json' },
+      signal: controller.signal,
+    })
+    const resPromise = POST(req)
+    controller.abort()
+    const res = await resPromise
+    // 消费响应体触发转发循环，abort 生效后流应终止
+    await expect(res.text()).resolves.toBeDefined()
+    // 允许取消回调异步落地
+    await new Promise(r => setTimeout(r, 20))
+    expect(cancelled).toBe(true)
+  })
+})
