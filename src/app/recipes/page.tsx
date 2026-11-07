@@ -13,6 +13,10 @@ interface ListResponse {
   invalidFiles: string[]
 }
 
+// 标签 chips 默认展示上限：标签来源（AI 生成/人工录入）不可控、数量可能无限多，
+// 只默认展示使用频次最高的前 N 个，其余折叠进「更多」（选中态标签强制显示，见渲染处注释）
+const TAG_CHIPS_LIMIT = 10
+
 export default function RecipesPage() {
   // 搜索框受控值（立即回显）；q 为防抖后的实际请求参数
   const [inputValue, setInputValue] = useState('')
@@ -26,8 +30,11 @@ export default function RecipesPage() {
   // 竞态防护：只接受最后一次请求的结果，防止乱序响应覆盖新结果
   const requestIdRef = useRef(0)
 
-  // 标签 chips 数据：从当前返回的全量列表（无 tag 过滤时）聚合 tag 去重
+  // 标签 chips 数据：从当前返回的全量列表（无 tag 过滤时）聚合 tag 去重，并按使用频次降序——
+  // 高频标签才是有筛选价值的，低频长尾折进「更多」
   const [allTags, setAllTags] = useState<string[]>([])
+  // 「更多」展开状态：默认收起只显示前 TAG_CHIPS_LIMIT 个
+  const [showAllTags, setShowAllTags] = useState(false)
 
   // 拉取菜谱列表：q/tag 变化都会触发
   const loadRecipes = useCallback(async (query: string, activeTag: string | null) => {
@@ -45,9 +52,13 @@ export default function RecipesPage() {
       if (id !== requestIdRef.current) return
       setRecipes(data.recipes)
       setInvalidFiles(data.invalidFiles)
-      // 仅在无标签过滤时聚合全量标签，作为 chips 数据源
+      // 仅在无标签过滤时聚合全量标签：统计每个 tag 的使用次数，按频次降序排列
       if (!activeTag) {
-        setAllTags([...new Set(data.recipes.flatMap((r) => r.tags))])
+        const counts = new Map<string, number>()
+        for (const r of data.recipes) {
+          for (const t of r.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
+        }
+        setAllTags([...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t))
       }
     } catch {
       // 网络异常（T5 遗留补齐）：置顶部错误条文案；过期响应不覆盖新状态
@@ -98,10 +109,12 @@ export default function RecipesPage() {
         />
       </div>
 
-      {/* 标签 chips：来自当前库内全部标签；再次点击取消选中 */}
+      {/* 标签 chips：默认只显示使用频次最高的前 10 个（标签来自 AI/人工录入，数量不可控，
+          全量铺开会把筛选区撑成无限长）；「更多」展开/收起全部。选中态的标签即使不在前 10 也强制显示，
+          避免展开状态下取消选中后该标签从界面上消失 */}
       {allTags.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
-          {allTags.map((t) => (
+          {(showAllTags ? allTags : allTags.slice(0, TAG_CHIPS_LIMIT)).map((t) => (
             <button
               key={t}
               type="button"
@@ -115,6 +128,16 @@ export default function RecipesPage() {
               {t}
             </button>
           ))}
+          {allTags.length > TAG_CHIPS_LIMIT && (
+            <button
+              type="button"
+              onClick={() => setShowAllTags((prev) => !prev)}
+              aria-label={showAllTags ? '收起标签' : '展开全部标签'}
+              className="rounded-full border border-dashed border-neutral-300 px-3 py-1 text-sm text-neutral-500 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
+            >
+              {showAllTags ? '收起' : `更多 (${allTags.length - TAG_CHIPS_LIMIT})`}
+            </button>
+          )}
         </div>
       )}
 
