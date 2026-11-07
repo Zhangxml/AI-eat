@@ -352,7 +352,7 @@ export default function RecipeForm({
             onClick={handleGenerate}
             disabled={generating || submitting || estimating || name.trim() === ''}
             aria-label="AI 生成菜谱"
-            className="min-h-[44px] shrink-0 rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
+            className="shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
           >
             {generating ? '生成中…' : 'AI 生成'}
           </button>
