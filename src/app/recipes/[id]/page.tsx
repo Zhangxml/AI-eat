@@ -116,8 +116,9 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
     return res
   }
 
-  // 404 态（守卫顺序：loadRecipe 命中 404 后 mode 仍为 'loading'，必须先判 notFound/errorText，
-  // 否则 loading 守卫会把这两个态永久挡住）——提示并给返回列表入口，不自动跳转避免打断用户
+  // 404 态：提示并给返回列表入口（不自动跳转，避免打断用户）。
+  // 守卫顺序说明：loadRecipe 的失败分支只置 notFound/errorText，mode 保持 'loading'，
+  // 因此 404/错误两个终态守卫必须全部排在 loading 守卫之前，否则会被「加载中…」永久挡住
   if (notFound) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-4">
@@ -134,16 +135,9 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
     )
   }
 
-  // 加载态：放在 404/错误守卫之后（loading 期间 notFound/errorText 均为 false/''，不受影响）
-  if (mode === 'loading') {
-    return (
-      <main className="mx-auto max-w-3xl px-4 py-4">
-        <p className="py-10 text-center text-sm text-neutral-400">加载中…</p>
-      </main>
-    )
-  }
-
-  // 错误态（非 404 失败）：提示 + 重试 + 返回列表
+  // 错误态（非 404 失败）：提示 + 重试 + 返回列表。
+  // 守卫顺序说明：loadRecipe 的失败分支只置 notFound/errorText，mode 保持 'loading'，
+  // 因此 404/错误两个终态守卫必须全部排在 loading 守卫之前，否则会被「加载中…」永久挡住
   if (errorText !== '') {
     return (
       <main className="mx-auto max-w-3xl px-4 py-4">
@@ -163,6 +157,15 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
             返回菜谱库
           </Link>
         </div>
+      </main>
+    )
+  }
+
+  // 加载态：排在 404/错误守卫之后（该两态命中时 mode 仍为 'loading'，靠前面守卫先返回）
+  if (mode === 'loading') {
+    return (
+      <main className="mx-auto max-w-3xl px-4 py-4">
+        <p className="py-10 text-center text-sm text-neutral-400">加载中…</p>
       </main>
     )
   }
