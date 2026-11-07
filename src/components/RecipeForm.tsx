@@ -55,6 +55,8 @@ export default function RecipeForm({
 
   const [submitting, setSubmitting] = useState(false)
   const [estimating, setEstimating] = useState(false)
+  // AI 整份生成（按名称）：生成中禁用相关按钮；完成后回填全部字段，由用户核对后手动保存
+  const [generating, setGenerating] = useState(false)
 
   // 食材名非空集合：AI 按钮可用性判断与请求体共用
   const ingredientNames = ingredients.map((r) => r.name.trim()).filter((n) => n !== '')
@@ -172,8 +174,7 @@ export default function RecipeForm({
 
   // AI 估算营养（裁定 3）：调 POST /api/ai/recipes，取 recipe.nutrition 回填四项
   async function handleEstimate() {
-    if (aiDisabled) return
-    setEstimating(true)
+    if (aiDisabled) return    setEstimating(true)
     try {
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
@@ -215,6 +216,75 @@ export default function RecipeForm({
     }
   }
 
+  // AI 整份生成（按名称）：调 POST /api/ai/recipes { dish: 名称 }，成功后把整份菜谱回填表单各字段。
+  // 只回填不保存：source 保持 'manual'（用户核对修改后手动保存，保存动作仍走表单提交），
+  // 营养/分类由 AI 结果带入但用户可随意改；名称为唯一必要输入。
+  async function handleGenerate() {
+    const trimName = name.trim()
+    if (trimName === '' || generating || submitting || estimating) return
+    setGenerating(true)
+    try {
+      const res = await apiFetch('/api/ai/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dish: trimName }),
+      })
+      if (res.status === 503) {
+        alert('AI 未配置，无法生成菜谱')
+        return
+      }
+      if (!res.ok) {
+        // 400/502 等：优先透出服务端中文 error（502 文案自带解析失败详情）
+        let msg = 'AI 生成失败，请稍后重试'
+        try {
+          const data = (await res.json()) as { error?: string }
+          if (typeof data?.error === 'string' && data.error !== '') msg = data.error
+        } catch {
+          // 保留默认文案
+        }
+        alert(msg)
+        return
+      }
+      const data = (await res.json()) as AiEstimateResponse
+      const r = data.recipe
+      if (!r) {
+        alert('AI 未返回菜谱数据')
+        return
+      }
+      // 整份回填（不含 id/时间戳/source——那是服务端入库语义，与本表单无关）：
+      // 标签用中文逗号连接以匹配 tagsText 的回显格式；营养四项转字符串回填
+      setName(r.name)
+      setCategory(r.category)
+      setServings(String(r.servings))
+      setDifficulty(r.difficulty)
+      setTotalTimeMin(String(r.totalTimeMin))
+      setTagsText(r.tags.join('，'))
+      setIngredients(
+        r.ingredients.length > 0
+          ? r.ingredients.map((i) => ({ name: i.name, amount: i.amount }))
+          : [{ name: '', amount: '' }],
+      )
+      setSteps(r.steps.length > 0 ? [...r.steps] : [''])
+      if (r.nutrition) {
+        setCaloriesText(String(r.nutrition.caloriesKcal))
+        setProteinText(String(r.nutrition.proteinG))
+        setFatText(String(r.nutrition.fatG))
+        setCarbText(String(r.nutrition.carbG))
+      } else {
+        setCaloriesText('')
+        setProteinText('')
+        setFatText('')
+        setCarbText('')
+      }
+      // 回填后置顶提示核对：不自动保存（需求明确要求用户核对后手动保存）
+      alert('已按名称生成菜谱并填入各字段，请核对修改后再保存')
+    } catch {
+      alert('AI 生成失败，网络异常，请稍后重试')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   // 行操作：新增即在尾部补一空白行；删除即按索引过滤（食材至少保留一行）
   function addIngredient() {
     setIngredients((prev) => [...prev, { name: '', amount: '' }])
@@ -243,21 +313,32 @@ export default function RecipeForm({
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-      {/* 基本信息 */}
-      <label className="block">
-        <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">
-          名称 <span className="text-red-500 dark:text-red-400">*</span>
-        </span>
+      {/* 基本信息：名称 + AI 生成整份菜谱（只填名称即可用；生成后仅回填表单，不自动保存） */}
+      <section>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className="block text-sm text-neutral-600 dark:text-neutral-400">
+            名称 <span className="text-red-500 dark:text-red-400">*</span>
+          </span>
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={generating || submitting || estimating || name.trim() === ''}
+            aria-label="AI 生成菜谱"
+            className="min-h-[44px] shrink-0 rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
+          >
+            {generating ? '生成中…' : 'AI 生成'}
+          </button>
+        </div>
         <input
           type="text"
           required
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="例如：番茄炒蛋"
+          placeholder="例如：番茄炒蛋（或填名称后点「AI 生成」）"
           aria-label="菜谱名称"
           className={inputClass}
         />
-      </label>
+      </section>
 
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
