@@ -137,18 +137,18 @@ export default function SettingsPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
-      <h1 className="mb-4 text-lg font-medium text-neutral-900">设置</h1>
+      <h1 className="mb-4 text-lg font-medium text-neutral-900 dark:text-neutral-100">设置</h1>
 
       {/* 备份区块：导出 + 导入 */}
-      <section className="mb-6 rounded-xl border border-neutral-200 p-4">
-        <h2 className="mb-3 text-sm font-medium text-neutral-900">备份</h2>
+      <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+        <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">备份</h2>
 
         {/* 导出：全宽按钮，触摸目标 ≥44px */}
         <button
           type="button"
           onClick={handleExport}
           disabled={exporting}
-          className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60"
+          className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300"
         >
           {exporting ? '导出中…' : '导出备份（JSON 下载）'}
         </button>
@@ -160,14 +160,14 @@ export default function SettingsPage() {
             accept=".json,application/json"
             onChange={handleFileChange}
             aria-label="选择备份文件"
-            className="min-h-[44px] w-full min-w-0 flex-1 text-sm text-neutral-600 file:mr-2 file:min-h-[44px] file:flex-none file:rounded-lg file:border-0 file:bg-neutral-900 file:px-3 file:text-base file:font-medium file:text-white"
+            className="min-h-[44px] w-full min-w-0 flex-1 text-sm text-neutral-600 file:mr-2 file:min-h-[44px] file:flex-none file:rounded-lg file:border-0 file:bg-neutral-900 file:px-3 file:text-base file:font-medium file:text-white dark:text-neutral-400 dark:file:bg-neutral-100 dark:file:text-neutral-900"
           />
           <button
             type="button"
             onClick={handleImport}
             disabled={!selectedFile || importing}
             aria-label="开始导入"
-            className="min-h-[44px] w-28 shrink-0 rounded-lg border border-neutral-900 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400"
+            className="min-h-[44px] w-28 shrink-0 rounded-lg border border-neutral-900 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
           >
             {importing ? '导入中…' : '开始导入'}
           </button>
@@ -175,24 +175,24 @@ export default function SettingsPage() {
 
         {/* 错误条：JSON 解析失败或服务端 400 文案 */}
         {error && (
-          <p role="alert" className="mt-3 break-words text-sm text-red-600">
+          <p role="alert" className="mt-3 break-words text-sm text-red-600 dark:text-red-400">
             {error}
           </p>
         )}
 
         {/* 导入结果：imported/skipped 计数 + skippedIds/invalidIds 明细 */}
         {result && (
-          <div className="mt-3 rounded-lg bg-neutral-100 p-3 text-sm">
-            <p className="text-neutral-900">
+          <div className="mt-3 rounded-lg bg-neutral-100 p-3 text-sm dark:bg-neutral-800">
+            <p className="text-neutral-900 dark:text-neutral-100">
               导入完成：新导入 {result.imported} 条，跳过 {result.skipped} 条
             </p>
             {result.skippedIds.length > 0 && (
-              <p className="mt-1 break-words text-neutral-600">
+              <p className="mt-1 break-words text-neutral-600 dark:text-neutral-400">
                 已存在跳过（{result.skippedIds.length}）：{result.skippedIds.join('、')}
               </p>
             )}
             {result.invalidIds.length > 0 && (
-              <p className="mt-1 break-words text-red-600">
+              <p className="mt-1 break-words text-red-600 dark:text-red-400">
                 非法跳过（{result.invalidIds.length}）：{result.invalidIds.join('、')}
               </p>
             )}
@@ -201,30 +201,30 @@ export default function SettingsPage() {
       </section>
 
       {/* AI 供应商只读展示：来自 GET /api/config，绝无 apiKey */}
-      <section className="mb-6 rounded-xl border border-neutral-200 p-4">
-        <h2 className="mb-3 text-sm font-medium text-neutral-900">AI 供应商</h2>
+      <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+        <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">AI 供应商</h2>
         {config === null ? (
-          <p className="text-sm text-neutral-500">状态加载失败</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">状态加载失败</p>
         ) : !config.aiConfigured ? (
-          <p className="text-sm text-neutral-600">
+          <p className="text-sm text-neutral-600 dark:text-neutral-400">
             未配置。请在服务器环境变量设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 后重启。
           </p>
         ) : (
           <div className="flex flex-col gap-1 text-sm">
-            <p className="break-words text-neutral-600">
-              接口地址：<span className="break-all text-neutral-900">{config.baseUrl}</span>
+            <p className="break-words text-neutral-600 dark:text-neutral-400">
+              接口地址：<span className="break-all text-neutral-900 dark:text-neutral-100">{config.baseUrl}</span>
             </p>
-            <p className="break-words text-neutral-600">
-              模型：<span className="break-all text-neutral-900">{config.model}</span>
+            <p className="break-words text-neutral-600 dark:text-neutral-400">
+              模型：<span className="break-all text-neutral-900 dark:text-neutral-100">{config.model}</span>
             </p>
           </div>
         )}
       </section>
 
       {/* 鉴权状态展示：PASSWORD 是否启用 */}
-      <section className="rounded-xl border border-neutral-200 p-4">
-        <h2 className="mb-3 text-sm font-medium text-neutral-900">访问鉴权</h2>
-        <p className="text-sm text-neutral-600">
+      <section className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+        <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">访问鉴权</h2>
+        <p className="text-sm text-neutral-600 dark:text-neutral-400">
           {config === null
             ? '状态加载失败'
             : config.authEnabled

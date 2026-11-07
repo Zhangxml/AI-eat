@@ -200,17 +200,18 @@ export default function DishesPage() {
     }
   }
 
-  // 移动端三约束：输入框 text-base（16px）+ min-h-[44px]；表单弹性行 min-w-0 防横滚
+  // 移动端三约束：输入框 text-base（16px）+ min-h-[44px]；表单弹性行 min-w-0 防横滚；
+  // 暗色适配：边框/文字/焦点色均带 dark: 变体，跟随系统深色模式
   const inputClass =
-    'min-h-[44px] w-full min-w-0 rounded-lg border border-neutral-300 px-3 text-base outline-none focus:border-neutral-900'
+    'min-h-[44px] w-full min-w-0 rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100'
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
-      <h1 className="mb-3 text-lg font-medium text-neutral-900">点菜</h1>
+      <h1 className="mb-3 text-lg font-medium text-neutral-900 dark:text-neutral-100">点菜</h1>
 
       {/* menu 请求失败的页面顶部错误条（400/502/503；502 文案含服务端解析详情） */}
       {menuError !== '' && (
-        <div role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+        <div role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
           {menuError}
         </div>
       )}
@@ -218,9 +219,9 @@ export default function DishesPage() {
       {/* 第一段表单：人数 + 口味偏好（选填）+ 开始点菜 */}
       <section
         aria-label="点菜条件"
-        className="mb-4 flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white p-4"
+        className="mb-4 flex flex-col gap-2 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
       >
-        <label htmlFor="people" className="text-sm text-neutral-600">
+        <label htmlFor="people" className="text-sm text-neutral-600 dark:text-neutral-400">
           用餐人数
         </label>
         <input
@@ -235,7 +236,7 @@ export default function DishesPage() {
           aria-label="用餐人数"
           className={inputClass}
         />
-        <label htmlFor="preference" className="text-sm text-neutral-600">
+        <label htmlFor="preference" className="text-sm text-neutral-600 dark:text-neutral-400">
           口味偏好（选填）
         </label>
         <input
@@ -248,13 +249,13 @@ export default function DishesPage() {
           className={inputClass}
         />
         {/* 人数非法行内提示 */}
-        {formError !== '' && <p className="text-sm text-red-500">{formError}</p>}
+        {formError !== '' && <p className="text-sm text-red-500 dark:text-red-400">{formError}</p>}
         <button
           type="button"
           onClick={() => void handleMenu()}
           disabled={menuLoading}
           aria-label="开始点菜"
-          className="min-h-[44px] w-full rounded-lg bg-neutral-900 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500"
+          className="min-h-[44px] w-full rounded-lg bg-neutral-900 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-400"
         >
           {menuLoading ? '点菜中…' : '开始点菜'}
         </button>
@@ -262,14 +263,14 @@ export default function DishesPage() {
 
       {/* 首次进入空态 */}
       {!menu && !menuLoading && (
-        <p className="py-10 text-center text-sm text-neutral-400">
+        <p className="py-10 text-center text-sm text-neutral-400 dark:text-neutral-500">
           输入人数，让 AI 搭一桌菜；看中哪道再单独生成完整菜谱
         </p>
       )}
 
       {/* 等待菜单：占位指示 */}
       {menuLoading && (
-        <p className="py-10 text-center text-sm text-neutral-400" aria-live="polite">
+        <p className="py-10 text-center text-sm text-neutral-400 dark:text-neutral-500" aria-live="polite">
           AI 正在搭配菜单…
         </p>
       )}
@@ -277,7 +278,7 @@ export default function DishesPage() {
       {menu && (
         <>
           {/* 推荐菜单：菜卡列表（菜名 + 分类徽标 + 推荐理由 + 生成菜谱按钮） */}
-          <h2 className="mb-2 text-base font-medium text-neutral-900">
+          <h2 className="mb-2 text-base font-medium text-neutral-900 dark:text-neutral-100">
             推荐菜单（{menu.dishes.length} 道）
           </h2>
           <ul className="mb-4 flex flex-col gap-3">
@@ -288,26 +289,26 @@ export default function DishesPage() {
                 <li
                   key={`${d.name}-${i}`}
                   aria-label={`推荐菜：${d.name}`}
-                  className="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-4"
+                  className="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
                 >
                   {/* 头部：菜名 + 分类徽标；弹性行 min-w-0 防溢出（无横滚约束） */}
                   <header className="flex min-w-0 flex-wrap items-center gap-2">
-                    <h3 className="min-w-0 text-base font-semibold text-neutral-900">{d.name}</h3>
-                    <span className="shrink-0 rounded-full bg-neutral-900 px-2 py-0.5 text-xs text-white">
+                    <h3 className="min-w-0 text-base font-semibold text-neutral-900 dark:text-neutral-100">{d.name}</h3>
+                    <span className="shrink-0 rounded-full bg-neutral-900 px-2 py-0.5 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">
                       {d.category}
                     </span>
                   </header>
                   {/* 推荐理由：break-words 防长文本撑破（无横滚） */}
-                  <p className="min-w-0 break-words text-sm leading-6 text-neutral-600">{d.reason}</p>
+                  <p className="min-w-0 break-words text-sm leading-6 text-neutral-600 dark:text-neutral-400">{d.reason}</p>
                   {/* 该菜生成失败的局部红字：仅本卡展示，不阻塞其他菜 */}
-                  {st.error && <p className="text-sm text-red-500">{st.error}</p>}
+                  {st.error && <p className="text-sm text-red-500 dark:text-red-400">{st.error}</p>}
                   {/* 生成菜谱按钮：generating/ready 均禁用（同名菜防重复触发） */}
                   <button
                     type="button"
                     onClick={() => void handleGenerate(d.name)}
                     disabled={st.phase === 'generating' || st.phase === 'ready'}
                     aria-label={`生成菜谱：${d.name}`}
-                    className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-white text-base font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400"
+                    className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-white text-base font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-800 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-500"
                   >
                     {st.phase === 'generating' ? '生成中…' : st.phase === 'ready' ? '已生成' : '生成菜谱'}
                   </button>
@@ -326,10 +327,10 @@ export default function DishesPage() {
           </ul>
 
           {/* 采购建议清单区块：合并去重后的采购清单 */}
-          <section aria-label="采购建议" className="rounded-xl border border-neutral-200 bg-white p-4">
-            <h2 className="mb-2 text-base font-medium text-neutral-900">采购建议</h2>
+          <section aria-label="采购建议" className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
+            <h2 className="mb-2 text-base font-medium text-neutral-900 dark:text-neutral-100">采购建议</h2>
             {menu.shopping.length > 0 ? (
-              <ul className="flex list-disc flex-col gap-1 pl-5 text-sm leading-6 text-neutral-800">
+              <ul className="flex list-disc flex-col gap-1 pl-5 text-sm leading-6 text-neutral-800 dark:text-neutral-200">
                 {menu.shopping.map((item, i) => (
                   <li key={i} className="min-w-0 break-words">
                     {item}
@@ -337,7 +338,7 @@ export default function DishesPage() {
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-neutral-400">暂无采购建议</p>
+              <p className="text-sm text-neutral-400 dark:text-neutral-500">暂无采购建议</p>
             )}
           </section>
         </>

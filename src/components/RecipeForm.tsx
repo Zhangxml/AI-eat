@@ -236,16 +236,17 @@ export default function RecipeForm({
   }
 
   // 移动端三约束：所有输入 text-base（16px，防 iOS 聚焦缩放）；触摸目标 min-h-[44px]；
-  // 弹性行一律 min-w-0 + truncate/收缩，保证无横向滚动
+  // 弹性行一律 min-w-0 + truncate/收缩，保证无横向滚动；
+  // 暗色适配：边框/文字/焦点色均带 dark: 变体，跟随系统深色模式
   const inputClass =
-    'min-h-[44px] w-full min-w-0 rounded-lg border border-neutral-300 px-3 text-base outline-none focus:border-neutral-900'
+    'min-h-[44px] w-full min-w-0 rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100'
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-5">
       {/* 基本信息 */}
       <label className="block">
-        <span className="mb-1 block text-sm text-neutral-600">
-          名称 <span className="text-red-500">*</span>
+        <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">
+          名称 <span className="text-red-500 dark:text-red-400">*</span>
         </span>
         <input
           type="text"
@@ -260,7 +261,7 @@ export default function RecipeForm({
 
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className="mb-1 block text-sm text-neutral-600">分类（可选）</span>
+          <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">分类（可选）</span>
           <select
             value={category ?? ''}
             onChange={(e) => setCategory(e.target.value as Recipe['category'])}
@@ -276,8 +277,8 @@ export default function RecipeForm({
           </select>
         </label>
         <label className="block">
-          <span className="mb-1 block text-sm text-neutral-600">
-            份量 <span className="text-red-500">*</span>
+          <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">
+            份量 <span className="text-red-500 dark:text-red-400">*</span>
           </span>
           <input
             type="number"
@@ -295,8 +296,8 @@ export default function RecipeForm({
 
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className="mb-1 block text-sm text-neutral-600">
-            难度 <span className="text-red-500">*</span>
+          <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">
+            难度 <span className="text-red-500 dark:text-red-400">*</span>
           </span>
           <input
             type="text"
@@ -309,8 +310,8 @@ export default function RecipeForm({
           />
         </label>
         <label className="block">
-          <span className="mb-1 block text-sm text-neutral-600">
-            总时长（分钟）<span className="text-red-500">*</span>
+          <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">
+            总时长（分钟）<span className="text-red-500 dark:text-red-400">*</span>
           </span>
           <input
             type="number"
@@ -327,7 +328,7 @@ export default function RecipeForm({
       </div>
 
       <label className="block">
-        <span className="mb-1 block text-sm text-neutral-600">标签（逗号分隔）</span>
+        <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">标签（逗号分隔）</span>
         <input
           type="text"
           value={tagsText}
@@ -340,8 +341,8 @@ export default function RecipeForm({
 
       {/* 食材行：名称 + 用量，可增删行 */}
       <section>
-        <span className="mb-1 block text-sm text-neutral-600">
-          食材 <span className="text-red-500">*</span>
+        <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">
+          食材 <span className="text-red-500 dark:text-red-400">*</span>
         </span>
         <div className="flex flex-col gap-2">
           {ingredients.map((row, idx) => (
@@ -367,7 +368,7 @@ export default function RecipeForm({
                 onClick={() => removeIngredient(idx)}
                 disabled={ingredients.length <= 1}
                 aria-label={`删除食材 ${idx + 1}`}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-neutral-300 text-lg text-neutral-500 transition-colors active:bg-neutral-100 disabled:opacity-40"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-neutral-300 text-lg text-neutral-500 transition-colors active:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
               >
                 ✕
               </button>
@@ -377,7 +378,7 @@ export default function RecipeForm({
         <button
           type="button"
           onClick={addIngredient}
-          className="mt-2 min-h-[44px] w-full rounded-lg border border-dashed border-neutral-300 text-sm text-neutral-600 transition-colors active:bg-neutral-100"
+          className="mt-2 min-h-[44px] w-full rounded-lg border border-dashed border-neutral-300 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
         >
           ＋ 添加食材
         </button>
@@ -385,8 +386,8 @@ export default function RecipeForm({
 
       {/* 步骤行：可增删行 */}
       <section>
-        <span className="mb-1 block text-sm text-neutral-600">
-          步骤 <span className="text-red-500">*</span>
+        <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">
+          步骤 <span className="text-red-500 dark:text-red-400">*</span>
         </span>
         <div className="flex flex-col gap-2">
           {steps.map((step, idx) => (
@@ -397,13 +398,13 @@ export default function RecipeForm({
                 onChange={(e) => updateStep(idx, e.target.value)}
                 placeholder={`步骤 ${idx + 1}`}
                 aria-label={`步骤 ${idx + 1}`}
-                className="w-full min-w-0 flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-base outline-none focus:border-neutral-900"
+                className="w-full min-w-0 flex-1 rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
               />
               <button
                 type="button"
                 onClick={() => removeStep(idx)}
                 aria-label={`删除步骤 ${idx + 1}`}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-neutral-300 text-lg text-neutral-500 transition-colors active:bg-neutral-100"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-neutral-300 text-lg text-neutral-500 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
               >
                 ✕
               </button>
@@ -413,7 +414,7 @@ export default function RecipeForm({
         <button
           type="button"
           onClick={addStep}
-          className="mt-2 min-h-[44px] w-full rounded-lg border border-dashed border-neutral-300 text-sm text-neutral-600 transition-colors active:bg-neutral-100"
+          className="mt-2 min-h-[44px] w-full rounded-lg border border-dashed border-neutral-300 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
         >
           ＋ 添加步骤
         </button>
@@ -422,20 +423,20 @@ export default function RecipeForm({
       {/* 营养四项（选填）：整体填写/整体置空；AI 估算按钮按名称+食材可用性启用 */}
       <section>
         <div className="mb-1 flex items-center justify-between gap-2">
-          <span className="text-sm text-neutral-600">营养（选填，AI 估算口径）</span>
+          <span className="text-sm text-neutral-600 dark:text-neutral-400">营养（选填，AI 估算口径）</span>
           <button
             type="button"
             onClick={handleEstimate}
             disabled={aiDisabled}
             aria-label="AI 估算营养"
-            className="min-h-[44px] shrink-0 rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400"
+            className="min-h-[44px] shrink-0 rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
           >
             {estimating ? '估算中…' : 'AI 估算营养'}
           </button>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <label className="block">
-            <span className="mb-1 block text-sm text-neutral-600">热量（千卡）</span>
+            <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">热量（千卡）</span>
             <input
               type="number"
               min={0}
@@ -448,7 +449,7 @@ export default function RecipeForm({
             />
           </label>
           <label className="block">
-            <span className="mb-1 block text-sm text-neutral-600">蛋白质（克）</span>
+            <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">蛋白质（克）</span>
             <input
               type="number"
               min={0}
@@ -461,7 +462,7 @@ export default function RecipeForm({
             />
           </label>
           <label className="block">
-            <span className="mb-1 block text-sm text-neutral-600">脂肪（克）</span>
+            <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">脂肪（克）</span>
             <input
               type="number"
               min={0}
@@ -474,7 +475,7 @@ export default function RecipeForm({
             />
           </label>
           <label className="block">
-            <span className="mb-1 block text-sm text-neutral-600">碳水（克）</span>
+            <span className="mb-1 block text-sm text-neutral-600 dark:text-neutral-400">碳水（克）</span>
             <input
               type="number"
               min={0}
@@ -493,7 +494,7 @@ export default function RecipeForm({
       <button
         type="submit"
         disabled={submitting}
-        className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60"
+        className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300"
       >
         {submitting ? '保存中…' : submitLabel}
       </button>

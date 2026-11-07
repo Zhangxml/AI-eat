@@ -17,15 +17,15 @@ export default function BottomNav() {
   const pathname = usePathname()
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-50 flex h-14 items-stretch border-t bg-white">
+    <nav className="fixed inset-x-0 bottom-0 z-50 flex h-14 items-stretch border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
       {NAV_ITEMS.map((item) => (
         <Link
           key={item.href}
           href={item.href}
           className={`flex min-h-[44px] flex-1 items-center justify-center text-sm transition-colors ${
             pathname === item.href
-              ? 'font-medium text-black'
-              : 'text-neutral-500 hover:text-black'
+              ? 'font-medium text-black dark:text-white'
+              : 'text-neutral-500 hover:text-black dark:hover:text-white'
           }`}
         >
           {item.label}

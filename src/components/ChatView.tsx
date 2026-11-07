@@ -163,9 +163,10 @@ export default function ChatView() {
     }
   }
 
-  // 移动端三约束：输入框 text-base（16px）+ min-h-[44px]；弹性行 min-w-0 防横滚
+  // 移动端三约束：输入框 text-base（16px）+ min-h-[44px]；弹性行 min-w-0 防横滚；
+  // 暗色适配：边框/文字/焦点色均带 dark: 变体，跟随系统深色模式
   const inputClass =
-    'min-h-[44px] w-full min-w-0 rounded-lg border border-neutral-300 px-3 text-base outline-none focus:border-neutral-900'
+    'min-h-[44px] w-full min-w-0 rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100'
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem)] flex-col">
@@ -174,9 +175,9 @@ export default function ChatView() {
         {items.length === 0 ? (
           // 空态：保留「AI 菜谱助手」定位提示
           <div className="flex h-full flex-col items-center justify-center text-center">
-            <h1 className="text-2xl font-bold tracking-tight text-neutral-900">AI-eat</h1>
-            <p className="mt-3 text-base text-neutral-600">你的 AI 菜谱助手</p>
-            <p className="mt-2 text-sm leading-6 text-neutral-500">
+            <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">AI-eat</h1>
+            <p className="mt-3 text-base text-neutral-600 dark:text-neutral-400">你的 AI 菜谱助手</p>
+            <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
               说说冰箱里有什么，让 AI 推荐今天吃什么；
               <br />
               生成的菜谱可一键存入菜谱库。
@@ -191,13 +192,13 @@ export default function ChatView() {
                   <div
                     className={`max-w-[85%] min-w-0 rounded-2xl px-3 py-2 text-base leading-6 ${
                       it.role === 'user'
-                        ? 'bg-neutral-900 text-white'
-                        : 'bg-neutral-100 text-neutral-900'
+                        ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+                        : 'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100'
                     }`}
                   >
                     <p className="whitespace-pre-wrap break-words">{it.text}</p>
                     {/* 错误红字显示在 assistant 气泡内 */}
-                    {it.error && <p className="mt-1 text-sm text-red-500">{it.error}</p>}
+                    {it.error && <p className="mt-1 text-sm text-red-500 dark:text-red-400">{it.error}</p>}
                   </div>
                 </div>
                 {/* recipe 事件：卡片挂当前 assistant 气泡下方（气泡+卡片一体渲染） */}
@@ -213,7 +214,7 @@ export default function ChatView() {
             ))}
             {/* 生成中：占位指示，增强流式等待体验 */}
             {pending && (
-              <div className="text-sm text-neutral-400" aria-live="polite">
+              <div className="text-sm text-neutral-400 dark:text-neutral-500" aria-live="polite">
                 AI 正在思考…
               </div>
             )}
@@ -222,7 +223,7 @@ export default function ChatView() {
       </div>
 
       {/* 底部输入区：贴底固定在滚动区下方；软键盘弹出时 dvh 容器压缩、气泡区滚动、输入框保持可见 */}
-      <div className="border-t border-neutral-200 bg-white px-3 py-2">
+      <div className="border-t border-neutral-200 bg-white px-3 py-2 dark:border-neutral-800 dark:bg-neutral-900">
         <div className="mx-auto flex max-w-3xl items-end gap-2">
           <textarea
             value={input}
@@ -245,7 +246,7 @@ export default function ChatView() {
             onClick={() => void handleSend()}
             disabled={pending || input.trim() === ''}
             aria-label="发送"
-            className="min-h-[44px] shrink-0 rounded-lg bg-neutral-900 px-4 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500"
+            className="min-h-[44px] shrink-0 rounded-lg bg-neutral-900 px-4 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-400"
           >
             发送
           </button>

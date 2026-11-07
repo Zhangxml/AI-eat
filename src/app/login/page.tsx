@@ -68,8 +68,8 @@ export default function LoginPage() {
 
   return (
     <main className="mx-auto flex max-w-sm flex-col justify-center px-4 py-10">
-      <h1 className="mb-2 text-lg font-medium text-neutral-900">AI-eat 登录</h1>
-      <p className="mb-6 text-sm text-neutral-600">
+      <h1 className="mb-2 text-lg font-medium text-neutral-900 dark:text-neutral-100">AI-eat 登录</h1>
+      <p className="mb-6 text-sm text-neutral-600 dark:text-neutral-400">
         {enabled === false ? '本实例未启用访问鉴权，可直接返回使用。' : '请输入访问口令（服务器 PASSWORD 环境变量）'}
       </p>
 
@@ -81,12 +81,12 @@ export default function LoginPage() {
           placeholder="访问口令"
           aria-label="访问口令"
           autoComplete="current-password"
-          className="min-h-[44px] w-full rounded-lg border border-neutral-300 px-3 text-base text-neutral-900 focus:border-neutral-900 focus:outline-none"
+          className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-white px-3 text-base text-neutral-900 focus:border-neutral-900 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:focus:border-neutral-100"
         />
         <button
           type="submit"
           disabled={submitting || password === ''}
-          className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60"
+          className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300"
         >
           {submitting ? '登录中…' : '登录'}
         </button>
@@ -94,7 +94,7 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={() => router.push('/')}
-            className="min-h-[44px] w-full rounded-lg border border-neutral-900 py-3 text-base font-medium text-neutral-900 transition-colors active:bg-neutral-100"
+            className="min-h-[44px] w-full rounded-lg border border-neutral-900 py-3 text-base font-medium text-neutral-900 transition-colors active:bg-neutral-100 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800"
           >
             返回首页
           </button>

@@ -24,20 +24,20 @@ export default function RecipeCard({
   return (
     <section
       aria-label={`菜谱：${recipe.name}`}
-      className="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-4"
+      className="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
     >
       {/* 头部：名称 + 分类徽标（category 可选）；弹性行 min-w-0 防溢出（无横滚约束） */}
       <header className="flex min-w-0 flex-wrap items-center gap-2">
-        <h3 className="min-w-0 text-base font-semibold text-neutral-900">{recipe.name}</h3>
+        <h3 className="min-w-0 text-base font-semibold text-neutral-900 dark:text-neutral-100">{recipe.name}</h3>
         {recipe.category && (
-          <span className="shrink-0 rounded-full bg-neutral-900 px-2 py-0.5 text-xs text-white">
+          <span className="shrink-0 rounded-full bg-neutral-900 px-2 py-0.5 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">
             {recipe.category}
           </span>
         )}
       </header>
 
       {/* 元信息：时长 / 份数 / 难度 / 标签，紧凑单行，可换行不横滚 */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-neutral-600">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-neutral-600 dark:text-neutral-400">
         <span>⏱ {recipe.totalTimeMin} 分钟</span>
         <span>👥 {recipe.servings} 人份</span>
         <span>难度：{recipe.difficulty}</span>
@@ -46,13 +46,13 @@ export default function RecipeCard({
 
       {/* 食材表：名称 + 用量 */}
       <div>
-        <h4 className="mb-1 text-sm font-medium text-neutral-700">食材</h4>
-        <ul className="flex flex-col gap-1 text-sm text-neutral-800">
+        <h4 className="mb-1 text-sm font-medium text-neutral-700 dark:text-neutral-300">食材</h4>
+        <ul className="flex flex-col gap-1 text-sm text-neutral-800 dark:text-neutral-200">
           {recipe.ingredients.map((ing, i) => (
             <li key={i} className="flex min-w-0 items-baseline gap-2">
-              <span className="shrink-0 text-neutral-500">·</span>
+              <span className="shrink-0 text-neutral-500 dark:text-neutral-400">·</span>
               <span className="min-w-0 break-words">{ing.name}</span>
-              <span className="min-w-0 break-words text-neutral-500">{ing.amount}</span>
+              <span className="min-w-0 break-words text-neutral-500 dark:text-neutral-400">{ing.amount}</span>
             </li>
           ))}
         </ul>
@@ -60,8 +60,8 @@ export default function RecipeCard({
 
       {/* 步骤有序列表 */}
       <div>
-        <h4 className="mb-1 text-sm font-medium text-neutral-700">步骤</h4>
-        <ol className="flex list-decimal flex-col gap-1 pl-5 text-sm leading-6 text-neutral-800">
+        <h4 className="mb-1 text-sm font-medium text-neutral-700 dark:text-neutral-300">步骤</h4>
+        <ol className="flex list-decimal flex-col gap-1 pl-5 text-sm leading-6 text-neutral-800 dark:text-neutral-200">
           {recipe.steps.map((step, i) => (
             <li key={i} className="min-w-0 break-words">
               {step}
@@ -71,7 +71,7 @@ export default function RecipeCard({
       </div>
 
       {/* 营养：estimated 恒为 true（AI 估算口径）→ 有值必须带「估算值」标注；缺失显示「未估算」 */}
-      <div className="text-sm text-neutral-600">
+      <div className="text-sm text-neutral-600 dark:text-neutral-400">
         {recipe.nutrition ? (
           <>
             营养（估算值）：{recipe.nutrition.caloriesKcal} 千卡 · 蛋白质{' '}
@@ -90,7 +90,7 @@ export default function RecipeCard({
           onClick={onSave}
           disabled={saved || saving}
           aria-label={saved ? '已入库' : '存入菜谱库'}
-          className="min-h-[44px] w-full rounded-lg bg-neutral-900 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500"
+          className="min-h-[44px] w-full rounded-lg bg-neutral-900 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-400"
         >
           {saved ? '已入库' : saving ? '入库中…' : '存入菜谱库'}
         </button>

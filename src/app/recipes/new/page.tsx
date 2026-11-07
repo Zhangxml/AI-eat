@@ -32,10 +32,10 @@ export default function NewRecipePage() {
     <main className="mx-auto max-w-3xl px-4 py-4">
       {/* 页头：标题 + 返回菜谱库 */}
       <header className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-lg font-medium text-neutral-900">录入新菜谱</h1>
+        <h1 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">录入新菜谱</h1>
         <Link
           href="/recipes"
-          className="flex min-h-[44px] items-center text-sm text-neutral-500 transition-colors active:text-neutral-900"
+          className="flex min-h-[44px] items-center text-sm text-neutral-500 transition-colors active:text-neutral-900 dark:text-neutral-400 dark:active:text-neutral-100"
         >
           返回菜谱库
         </Link>

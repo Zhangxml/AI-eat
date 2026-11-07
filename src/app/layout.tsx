@@ -18,12 +18,11 @@ export const metadata: Metadata = {
   description: "管理菜谱、按现有食材点菜的 AI 菜谱助手",
 };
 
-// 移动端 viewport：约束缩放以贴近原生应用体验
+// 移动端 viewport：跟随系统默认缩放（允许用户手势缩放，符合 WCAG 1.4.4）；
+// 输入控件字号已统一 text-base（16px），iOS 聚焦不会自动放大页面
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
 };
 
 export default function RootLayout({

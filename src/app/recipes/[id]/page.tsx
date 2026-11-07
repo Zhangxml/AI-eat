@@ -16,13 +16,13 @@ import type { DraftRecipe, Recipe } from '@/lib/recipe-types'
 // 页面三种状态：loading 拉取中 / view 详情态 / edit 编辑态
 type PageMode = 'loading' | 'view' | 'edit'
 
-// 分类徽标配色：与 RecipeListItem 保持一致
+// 分类徽标配色：与 RecipeListItem 保持一致（含 dark: 变体）
 const CATEGORY_STYLES: Record<NonNullable<Recipe['category']>, string> = {
-  荤菜: 'bg-red-50 text-red-700',
-  素菜: 'bg-green-50 text-green-700',
-  汤: 'bg-amber-50 text-amber-700',
-  主食: 'bg-blue-50 text-blue-700',
-  其他: 'bg-neutral-100 text-neutral-600',
+  荤菜: 'bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+  素菜: 'bg-green-50 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+  汤: 'bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  主食: 'bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+  其他: 'bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300',
 }
 
 // 从服务端错误响应中提取中文 error；解析失败回退默认文案
@@ -122,11 +122,11 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
   if (notFound) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-4">
-        <p className="py-10 text-center text-sm text-neutral-500">菜谱不存在或已被删除</p>
+        <p className="py-10 text-center text-sm text-neutral-500 dark:text-neutral-400">菜谱不存在或已被删除</p>
         <div className="flex justify-center">
           <Link
             href="/recipes"
-            className="flex min-h-[44px] items-center rounded-lg px-4 text-sm text-neutral-900 underline transition-colors active:bg-neutral-100"
+            className="flex min-h-[44px] items-center rounded-lg px-4 text-sm text-neutral-900 underline transition-colors active:bg-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800"
           >
             返回菜谱库
           </Link>
@@ -141,18 +141,18 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
   if (errorText !== '') {
     return (
       <main className="mx-auto max-w-3xl px-4 py-4">
-        <p className="py-10 text-center text-sm text-neutral-500">{errorText}</p>
+        <p className="py-10 text-center text-sm text-neutral-500 dark:text-neutral-400">{errorText}</p>
         <div className="flex justify-center gap-3">
           <button
             type="button"
             onClick={() => void loadRecipe()}
-            className="flex min-h-[44px] items-center rounded-lg border border-neutral-900 px-4 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100"
+            className="flex min-h-[44px] items-center rounded-lg border border-neutral-900 px-4 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800"
           >
             重试
           </button>
           <Link
             href="/recipes"
-            className="flex min-h-[44px] items-center rounded-lg border border-neutral-300 px-4 text-sm text-neutral-600 transition-colors active:bg-neutral-100"
+            className="flex min-h-[44px] items-center rounded-lg border border-neutral-300 px-4 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
           >
             返回菜谱库
           </Link>
@@ -165,7 +165,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
   if (mode === 'loading') {
     return (
       <main className="mx-auto max-w-3xl px-4 py-4">
-        <p className="py-10 text-center text-sm text-neutral-400">加载中…</p>
+        <p className="py-10 text-center text-sm text-neutral-400 dark:text-neutral-500">加载中…</p>
       </main>
     )
   }
@@ -175,13 +175,13 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
     return (
       <main className="mx-auto max-w-3xl px-4 py-4">
         <header className="mb-4 flex items-center justify-between gap-2">
-          <h1 className="min-w-0 flex-1 truncate text-lg font-medium text-neutral-900">
+          <h1 className="min-w-0 flex-1 truncate text-lg font-medium text-neutral-900 dark:text-neutral-100">
             编辑「{recipe.name}」
           </h1>
           <button
             type="button"
             onClick={() => setMode('view')}
-            className="flex min-h-[44px] shrink-0 items-center text-sm text-neutral-500 transition-colors active:text-neutral-900"
+            className="flex min-h-[44px] shrink-0 items-center text-sm text-neutral-500 transition-colors active:text-neutral-900 dark:text-neutral-400 dark:active:text-neutral-100"
           >
             取消
           </button>
@@ -199,7 +199,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
       {/* 页头：菜名 + 分类徽标 + 操作按钮（编辑/删除），按钮触摸目标 ≥44px */}
       <header className="mb-4 flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <h1 className="min-w-0 truncate text-xl font-medium text-neutral-900">{recipe.name}</h1>
+          <h1 className="min-w-0 truncate text-xl font-medium text-neutral-900 dark:text-neutral-100">{recipe.name}</h1>
           {recipe.category && (
             <span
               className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${CATEGORY_STYLES[recipe.category]}`}
@@ -212,7 +212,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           <button
             type="button"
             onClick={() => setMode('edit')}
-            className="flex min-h-[44px] items-center rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100"
+            className="flex min-h-[44px] items-center rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800"
           >
             编辑
           </button>
@@ -220,7 +220,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
             type="button"
             onClick={() => void handleDelete()}
             disabled={deleting}
-            className="flex min-h-[44px] items-center rounded-lg border border-red-200 px-3 text-sm text-red-600 transition-colors active:bg-red-50 disabled:opacity-60"
+            className="flex min-h-[44px] items-center rounded-lg border border-red-200 px-3 text-sm text-red-600 transition-colors active:bg-red-50 disabled:opacity-60 dark:border-red-900 dark:text-red-400 dark:active:bg-red-950"
           >
             {deleting ? '删除中…' : '删除'}
           </button>
@@ -228,7 +228,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
       </header>
 
       {/* 元信息：份量 / 难度 / 总时长 / 来源，小字一行 */}
-      <p className="text-sm text-neutral-500">
+      <p className="text-sm text-neutral-500 dark:text-neutral-400">
         {recipe.servings} 人份 · 难度 {recipe.difficulty} · 约 {recipe.totalTimeMin} 分钟 ·{' '}
         {recipe.source === 'ai' ? 'AI 生成' : '手动录入'}
       </p>
@@ -239,7 +239,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           {recipe.tags.map((t) => (
             <span
               key={t}
-              className="rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-xs text-neutral-600"
+              className="rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
             >
               {t}
             </span>
@@ -248,47 +248,47 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
       )}
 
       {/* 营养：缺失显示「未估算」；有值显示四项数值并标注 AI 估算值（estimated 恒 true，人工录入带营养同样标注） */}
-      <section className="mt-4 rounded-xl border border-neutral-200 bg-white p-4">
+      <section className="mt-4 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
         {recipe.nutrition ? (
           <>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <div>
-                <p className="text-xs text-neutral-500">热量</p>
-                <p className="text-base text-neutral-900">{recipe.nutrition.caloriesKcal} 千卡</p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">热量</p>
+                <p className="text-base text-neutral-900 dark:text-neutral-100">{recipe.nutrition.caloriesKcal} 千卡</p>
               </div>
               <div>
-                <p className="text-xs text-neutral-500">蛋白质</p>
-                <p className="text-base text-neutral-900">{recipe.nutrition.proteinG} 克</p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">蛋白质</p>
+                <p className="text-base text-neutral-900 dark:text-neutral-100">{recipe.nutrition.proteinG} 克</p>
               </div>
               <div>
-                <p className="text-xs text-neutral-500">脂肪</p>
-                <p className="text-base text-neutral-900">{recipe.nutrition.fatG} 克</p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">脂肪</p>
+                <p className="text-base text-neutral-900 dark:text-neutral-100">{recipe.nutrition.fatG} 克</p>
               </div>
               <div>
-                <p className="text-xs text-neutral-500">碳水</p>
-                <p className="text-base text-neutral-900">{recipe.nutrition.carbG} 克</p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400">碳水</p>
+                <p className="text-base text-neutral-900 dark:text-neutral-100">{recipe.nutrition.carbG} 克</p>
               </div>
             </div>
-            <p className="mt-2 text-xs text-neutral-400">AI 估算值，仅供参考</p>
+            <p className="mt-2 text-xs text-neutral-400 dark:text-neutral-500">AI 估算值，仅供参考</p>
           </>
         ) : (
-          <p className="text-sm text-neutral-400">营养：未估算</p>
+          <p className="text-sm text-neutral-400 dark:text-neutral-500">营养：未估算</p>
         )}
       </section>
 
       {/* 食材：分区标题 + 名称/用量列表 */}
       <section className="mt-4">
-        <h2 className="mb-2 text-base font-medium text-neutral-900">
+        <h2 className="mb-2 text-base font-medium text-neutral-900 dark:text-neutral-100">
           食材（{recipe.ingredients.length}）
         </h2>
-        <ul className="rounded-xl border border-neutral-200 bg-white px-4 py-1">
+        <ul className="rounded-xl border border-neutral-200 bg-white px-4 py-1 dark:border-neutral-800 dark:bg-neutral-900">
           {recipe.ingredients.map((ing, idx) => (
             <li
               key={`${ing.name}-${idx}`}
-              className="flex items-baseline gap-2 border-b border-neutral-100 py-2.5 text-sm last:border-b-0"
+              className="flex items-baseline gap-2 border-b border-neutral-100 py-2.5 text-sm last:border-b-0 dark:border-neutral-800"
             >
-              <span className="min-w-0 flex-1 text-neutral-900">{ing.name}</span>
-              <span className="shrink-0 text-neutral-500">{ing.amount}</span>
+              <span className="min-w-0 flex-1 text-neutral-900 dark:text-neutral-100">{ing.name}</span>
+              <span className="shrink-0 text-neutral-500 dark:text-neutral-400">{ing.amount}</span>
             </li>
           ))}
         </ul>
@@ -296,19 +296,19 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
 
       {/* 步骤：有序列表（编号圆点即顺序），长文本自动换行不撑出横滚 */}
       <section className="mt-4">
-        <h2 className="mb-2 text-base font-medium text-neutral-900">
+        <h2 className="mb-2 text-base font-medium text-neutral-900 dark:text-neutral-100">
           步骤（{recipe.steps.length}）
         </h2>
         <ol className="flex flex-col gap-2">
           {recipe.steps.map((step, idx) => (
             <li
               key={idx}
-              className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white p-3"
+              className="flex items-start gap-2 rounded-xl border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-900"
             >
-              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-xs text-white">
+              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">
                 {idx + 1}
               </span>
-              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-neutral-900">
+              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-neutral-900 dark:text-neutral-100">
                 {step}
               </p>
             </li>

@@ -3,6 +3,8 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* 原生控件（select 下拉/滚动条/输入框）跟随系统明暗，与下方 dark: 变体策略一致 */
+  color-scheme: light;
 }
 
 @theme inline {
@@ -16,6 +18,7 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    color-scheme: dark;
   }
 }
 

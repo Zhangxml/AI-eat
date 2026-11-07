@@ -1,36 +1,88 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI-eat · AI 菜谱助手
 
-## Getting Started
+AI-eat 是一个部署在局域网的自用 Web 工具：用本地 JSON 文件管理自己的菜谱库，并接入 OpenAI 兼容的大模型接口，实现 AI 聊天推荐菜谱、按现有食材「点菜」生成一桌菜单、AI 估算营养等能力。移动端优先设计，深色模式跟随系统。
 
-First, run the development server:
+## 功能清单
+
+- **聊天点菜（首页 `/`）**：说说冰箱里有什么，AI 流式回复并可直接生成完整菜谱，一键存入菜谱库（SSE 流式，聊天记录不持久化，刷新即丢）
+- **菜谱库（`/recipes`）**：搜索（防抖）、标签筛选、格式异常文件提示、空态引导；右下角浮动按钮录入新菜谱
+- **菜谱详情（`/recipes/[id]`）**：查看 / 编辑 / 删除；营养四项 + AI 估算值标注；食材表、步骤有序列表
+- **人工录入 / 编辑（`/recipes/new` 等）**：受控表单，食材/步骤可增删行；支持 AI 估算营养回填
+- **点菜（`/dishes`）**：两段式——输入人数（+ 可选口味偏好）生成一桌菜单与采购建议，看中哪道再单独生成完整菜谱并入库
+- **备份（`/settings`）**：导出全量 JSON 下载；导入时自动跳过已存在（按 id）与非法条目
+- **访问鉴权（可选）**：设置 `PASSWORD` 环境变量后需口令登录；留空则局域网信任边界免登录
+- **移动端与深色模式**：375px 宽无横向滚动、触摸目标 ≥44px、输入字号 16px（防 iOS 聚焦缩放）；深色模式跟随系统（`prefers-color-scheme`），无手动切换
+
+## 快速开始
+
+### 方式一：裸机（需 Node.js 20+）
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# 1. 安装依赖
+npm ci
+
+# 2. 配置环境变量（全部可选，见下表）
+cp .env.example .env
+vim .env
+
+# 3. 构建 + 后台启动（默认端口 8080，可用 PORT=xxx 覆盖）
+./run.sh
+
+# 其他命令
+./run.sh status    # 查看运行状态
+./run.sh restart   # 停止 + 清构建产物重新构建启动（改代码后用它）
+./run.sh stop      # 停止
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+启动成功后会打印本机与局域网访问地址；日志在 `ai-eat.log`。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 方式二：Docker Compose
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+# 1. 配置环境变量（compose 自动读取同目录 .env）
+cp .env.example .env
+vim .env
 
-## Learn More
+# 2. 构建并启动（宿主机 8080 → 容器 3000，数据落宿主机 ./data）
+docker compose up -d
 
-To learn more about Next.js, take a look at the following resources:
+# 查看日志 / 停止
+docker compose logs -f
+docker compose down
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 环境变量
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `AI_BASE_URL` | 否 | AI 供应商 OpenAI 兼容接口地址（如 `https://api.example.com/v1`） |
+| `AI_API_KEY` | 否 | AI 供应商 API Key，仅服务端读取，任何接口不会回显 |
+| `AI_MODEL` | 否 | 模型名（按供应商填写，如 `deepseek-chat`） |
+| `PASSWORD` | 否 | 访问口令；非空即启用登录鉴权，留空免登录 |
+| `AI_EAT_DATA_DIR` | 否 | 菜谱数据目录（默认 `<项目目录>/data/recipes`）；裸机无需设置，Docker 部署由 compose 固定注入 |
 
-## Deploy on Vercel
+三项 AI 配置（`AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`）齐备时 AI 功能可用；缺省时应用仍可正常使用手动菜谱、备份等本地功能，仅 AI 生成与点菜不可用。设置页（`/settings`）可查看当前配置状态。
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 备份说明
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+数据全部为本地 JSON 文件，无数据库，两条备份通道：
+
+1. **目录备份（推荐）**：直接备份 `data/` 目录（裸机默认 `<项目目录>/data`；Docker 部署为宿主机挂载的 `./data`）。停机后整目录复制即可。
+2. **页面导入导出**：设置页「导出备份（JSON 下载）」得到全量 JSON；换机或恢复时「选择备份文件 → 开始导入」，已存在（按 id）与非法条目自动跳过并在结果中列明。
+
+## 局域网访问
+
+启动后同一局域网内的手机/平板直接访问：
+
+```
+http://<服务器IP>:8080
+```
+
+服务器 IP 可用 `./run.sh status` 查看。建议部署时设置 `PASSWORD` 启用口令鉴权（本应用面向局域网信任边界设计，未启用鉴权时局域网内任何人可读写菜谱数据）。
+
+## 已知限制
+
+- **AI 生成内容未经核实**：AI 菜谱与点菜结果为模型生成内容，未经联网核实，食材用量、步骤、时长等请自行判断；过敏原、食品安全相关请务必自行确认。
+- **营养为估算值**：营养四项（热量/蛋白质/脂肪/碳水）为 AI 估算，非实测，仅供参考，不作为健康或医疗依据。
+- **聊天记录不持久化**：AI 聊天仅存内存，刷新页面即丢失（有意设计）；需要保留的菜谱请及时「存入菜谱库」。
+- **Docker 真实构建验收待补验**：Dockerfile 三段构建、compose 编排已就绪，但开发环境无 Docker，真实 `docker compose up` 构建验收待有 Docker 环境时补验一次（裸机 `run.sh` 路径已实测）。
