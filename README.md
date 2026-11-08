@@ -61,7 +61,7 @@ docker compose down
 | `AI_MODEL` | 否 | 模型名（按供应商填写，如 `deepseek-chat`） |
 | `AI_TEMP_CHAT` / `AI_TEMP_MENU` / `AI_TEMP_RECIPE` / `AI_TEMP_NUTRITION` | 否 | AI 温度分层覆盖：默认 0.7 / 0.8 / 0.7 / 0.5；非法值自动回落并限制在 0~1 |
 | `PASSWORD` | 否 | 访问口令；非空即启用登录鉴权，留空免登录 |
-| `TRUST_PROXY` | 否 | 设为 `true` 时访问日志从 `x-forwarded-for` 取真实客户端 IP（仅前置反代可信时用）；默认不信任该头 |
+| `TRUST_PROXY` | 否 | 默认取 `x-forwarded-for` 末段（Next 注入的真实对端）；设为 `true` 时取首段（前置反代写入的真实客户端 IP） |
 | `DELETE_ENABLED` + `DELETE_PASSWORD` | 否 | 两者同时满足时启用删除密码保护 |
 | `AI_EAT_DATA_DIR` | 否 | 菜谱数据目录（默认 `<项目目录>/data/recipes`）；裸机无需设置，Docker 部署由 compose 固定注入 |
 

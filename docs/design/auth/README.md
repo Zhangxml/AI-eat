@@ -15,7 +15,7 @@
 | **访问鉴权** | `PASSWORD` | 整站读写：未登录访问任何受保护接口 → 401，前端跳登录页 |
 | **删除保护** | `DELETE_ENABLED=true` + `DELETE_PASSWORD` | 仅删除操作：删菜谱必须携带正确密码 → 403 拒绝 |
 
-另有 `TRUST_PROXY=true`（可选）：仅在前置反向代理可信时设置，访问日志的 IP 提取才会读 `x-forwarded-for` 首段；默认不设置（直连部署），XFF 一律不读、取 socket 远端地址（详见「访问记录」一节）。
+另有 `TRUST_PROXY=true`（可选）：仅在前置反向代理可信时设置。默认（直连部署）取 `x-forwarded-for` **末段**（Next 注入的真实对端，链首可能是客户端伪造值）；设为 `true` 时取**首段**（代理写入的真实客户端 IP）。详见「访问记录」一节。
 
 ## 怎么做的
 
@@ -60,7 +60,7 @@ DELETE /api/recipes/:id（启用时要求 body { deletePassword }）
 - **存储**：`data/logs/access.jsonl`（JSON Lines），与菜谱库同受 data 卷保护；正常路径 `fs.appendFile`（O_APPEND 单行原子追加），达上限 200 条时「读→截断→tmp→rename」压缩且经模块级 Promise 队列串行，滚动丢弃最旧（4 页即看完全部），文件永不无限增长
 - **展示分页**：列表页前端分页（50 条/页，「上一页/下一页」+「第 N / M 页 · 共 X 条」指示）——数据一次拉全量（上限 200 条传输极小），切片渲染避免长列表；刷新重置回第一页
 - **隐私红线**：不含任何密码/Key/查询参数（搜索词不记录）；删除保护 403 的路径不带 id（密码未验过，id 不可信）；日志写失败静默吞掉，绝不打断主业务响应
-- **IP 提取**：默认不信任 `x-forwarded-for`（该头可伪造，直连部署下会污染审计），读 socket 远端地址、取不到为 `unknown`；`TRUST_PROXY=true`（前置反代可信）时才取 XFF 首段
+- **IP 提取**：Next App Router 不暴露 socket，真实对端地址由 Next 写入 `x-forwarded-for`。默认取**末段**（客户端自造值会排在链首，末段是直连写入的真实对端）；`TRUST_PROXY=true`（前置反代可信）时取**首段**。取不到记 `unknown`。安全定位：直连场景下伪造整个 XFF 头仍可行，审计 IP 是「尽力而为」而非强身份凭证
 - 读接口 `GET /api/access-logs` 受 PASSWORD 守卫保护，且自身不写日志
 
 ## 为什么这么做

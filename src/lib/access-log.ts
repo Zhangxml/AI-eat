@@ -9,7 +9,7 @@ import path from 'node:path'
 export interface AccessLogEntry {
   /** ISO 8601 访问时间 */
   time: string
-  /** 客户端 IP（TRUST_PROXY=true 时取 x-forwarded-for 首段；否则取 socket 地址，取不到为 unknown） */
+  /** 客户端 IP（默认取 x-forwarded-for 末段=直连真实对端；TRUST_PROXY=true 时取首段=反代后的真实客户端） */
   ip: string
   /** HTTP 方法 */
   method: string
@@ -31,18 +31,19 @@ function accessLogPath(): string {
 // 容量上限：超过即丢弃最旧条目（保留最近 MAX_ENTRIES 条）。200 条（4 页）足够回溯近期敏感操作
 const MAX_ENTRIES = 200
 
-// 从请求中提取客户端 IP（审计修复 #15：不再默认信任 x-forwarded-for——该头可被客户端伪造，
-// 直连部署下伪造 IP 会污染审计记录。行为按部署形态二分：
-// - 直连（默认，TRUST_PROXY 未设）：读 Node 扩展的 socket 远端地址，取不到返回 'unknown'；XFF 头一律不读
-// - 反代（TRUST_PROXY=true）：前置代理可信，取 x-forwarded-for 首段（真实客户端 IP 由代理写入）
+// 从请求中提取客户端 IP。App Router 不向 handler 暴露 socket，Next 会把真实对端地址写进
+// x-forwarded-for（客户端自造的值会排在链首），因此按部署形态二分取值：
+// - 直连（默认，TRUST_PROXY 未设）：取 XFF **末段**——链首可能是客户端伪造值，末段是 Next 写入的真实对端
+// - 反代（TRUST_PROXY=true）：前置代理可信，取 XFF **首段**（代理写入的真实客户端 IP）
+// 安全说明：直连场景下客户端仍可自造整个 XFF 头伪造身份；自用局域网内能做这件事的人本就能直接
+// 访问菜谱库，审计 IP 定位为「尽力而为」而非强身份凭证。
 export function clientIpOf(req: Request): string {
-  if (process.env.TRUST_PROXY === 'true') {
-    const fwd = req.headers.get('x-forwarded-for')
-    const first = fwd?.split(',')[0]?.trim()
-    if (first) return first
+  const fwd = req.headers.get('x-forwarded-for')
+  const parts = fwd?.split(',').map((s) => s.trim()).filter((s) => s !== '') ?? []
+  if (parts.length > 0) {
+    return process.env.TRUST_PROXY === 'true' ? parts[0] : parts[parts.length - 1]
   }
-  // Node 的 Request 带 socket 扩展（undici 类型未暴露，运行时存在）；App Router 下 Next 可能已把
-  // socket IP 注入 XFF，但代码语义上不再主动信任该头（仅 TRUST_PROXY=true 时读取）
+  // 无 XFF（非 Next 环境或直调 handler）：回退 socket 扩展，取不到记 unknown
   const anyReq = req as Request & { socket?: { remoteAddress?: string } }
   const addr = anyReq.socket?.remoteAddress
   return addr && addr !== '' ? addr : 'unknown'
