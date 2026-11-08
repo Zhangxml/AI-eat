@@ -10,7 +10,7 @@
 // savedNames+savingNames 以 dishName 为键防抖（同名菜共用一份状态 → 天然满足同名菜防重复生成/防重复入库）
 // 错误处理：menu 失败 → 页面顶部错误条中文展示（502 文案自带服务端解析详情）；
 //           单菜生成失败 → 该菜卡内局部红字并回退 idle 允许重试，不阻塞其他菜
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
 import RecipeCard from '@/components/RecipeCard'
 import type { Recipe } from '@/lib/recipe-types'
@@ -85,6 +85,12 @@ export default function DishesPage() {
   // savedNames 已入库（按钮变「已入库」并禁用）；savingNames 请求往返期间禁用（防 201 前双击双入库）
   const [savedNames, setSavedNames] = useState<Record<string, boolean>>({})
   const [savingNames, setSavingNames] = useState<Record<string, boolean>>({})
+  // 请求取消（审计修复）：点菜/逐菜生成的进行中请求挂到 AbortController，组件卸载时 abort，
+  // 卸载后不再 setState；ref 保活，回调读到最新实例
+  const abortRef = useRef<AbortController | null>(null)
+  useEffect(() => {
+    return () => abortRef.current?.abort()
+  }, [])
 
   // 第一段：开始点菜 → POST /api/ai/menu（契约 Task 13：200 { dishes, shopping } | 400/502/503 { error: 中文 }）
   async function handleMenu() {
@@ -99,13 +105,17 @@ export default function DishesPage() {
     setMenuError('')
     setMenuLoading(true)
     try {
+      const controller = new AbortController()
+      abortRef.current = controller
       // preference 选填：trim 后为空则不携带该字段（与服务端「空串视为未提供」口径一致）
       const pref = preference.trim()
       const res = await apiFetch('/api/ai/menu', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pref === '' ? { people } : { people, preference: pref }),
+        signal: controller.signal,
       })
+      if (controller.signal.aborted) return
       if (!res.ok) {
         // 400/502/503 均为 { error: 中文 }；502 文案自带首轮解析详情，整条透出到顶部错误条
         let msg = `请求失败（HTTP ${res.status}）`
@@ -125,6 +135,8 @@ export default function DishesPage() {
       setSavedNames({})
       setSavingNames({})
     } catch {
+      // 卸载触发的 abort 不再 setState（避免卸载后更新）
+      if (abortRef.current?.signal.aborted) return
       setMenuError('网络异常，请稍后重试')
     } finally {
       setMenuLoading(false)
@@ -139,11 +151,16 @@ export default function DishesPage() {
     if (st && (st.phase === 'generating' || st.phase === 'ready')) return
     setDishStates((prev) => ({ ...prev, [name]: { phase: 'generating' } }))
     try {
+      const controller = new AbortController()
+      abortRef.current = controller
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dish: name, servings: menu.people }),
+        signal: controller.signal,
       })
+      // 卸载触发的 abort：结果作废，不再 setState
+      if (controller.signal.aborted) return
       if (res.ok) {
         // 注意：/api/ai/recipes 200 为 { recipe } 包裹形状（与 /api/recipes 入库接口的裸 Recipe 不同）
         const data = (await res.json()) as { recipe: Recipe }
@@ -167,6 +184,8 @@ export default function DishesPage() {
       }
       setDishStates((prev) => ({ ...prev, [name]: { phase: 'idle', error: msg } }))
     } catch {
+      // 卸载触发的 abort 不再 setState；其余网络异常回 idle 允许重试
+      if (abortRef.current?.signal.aborted) return
       setDishStates((prev) => ({ ...prev, [name]: { phase: 'idle', error: '网络异常，请稍后重试' } }))
     }
   }

@@ -2,6 +2,7 @@
 // 数据目录经 process.env.AI_EAT_DATA_DIR 注入临时目录（store 每次调用时读 env，模块顶层默认值不受影响）
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { GET as listR, POST as createR } from './route'
 import { GET as getR, PUT as putR, DELETE as delR } from './[id]/route'
 import { issueToken } from '@/lib/auth'
@@ -170,5 +171,31 @@ describe('菜谱库 REST API', () => {
       delete process.env.DELETE_ENABLED
       delete process.env.DELETE_PASSWORD
     }
+  })
+
+  it('listRecipes 非 ENOENT 故障 → GET 列表 500 中文（审计修复 #8，不再静默当空库）', async () => {
+    // 把数据目录指到一个普通文件上：readdir 抛 ENOTDIR（非 ENOENT），route 必须返回 500
+    const filePath = path.join(dir, 'not-a-dir')
+    await fs.writeFile(filePath, 'x', 'utf8')
+    process.env.AI_EAT_DATA_DIR = filePath
+    try {
+      const res = await listR(new Request('http://x/api/recipes'))
+      expect(res.status).toBe(500)
+      expect(((await res.json()) as { error: string }).error).toContain('菜谱库读取失败')
+    } finally {
+      process.env.AI_EAT_DATA_DIR = dir
+    }
+  })
+
+  it('POST 创建：content-length 超 1MB → 413 { error: 请求体过大 }（审计修复 #4）', async () => {
+    const res = await createR(
+      new Request('http://x', {
+        method: 'POST',
+        body: JSON.stringify(goodDraft),
+        headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024 + 1) },
+      }),
+    )
+    expect(res.status).toBe(413)
+    expect(((await res.json()) as { error: string }).error).toBe('请求体过大')
   })
 })

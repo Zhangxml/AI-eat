@@ -18,9 +18,17 @@ describe('访问日志', () => {
     delete process.env.AI_EAT_DATA_DIR
   })
 
-  it('clientIpOf：x-forwarded-for 首段优先；无头时回退 socket/unknown', () => {
+  it('clientIpOf：默认不信任 XFF（取 socket/unknown）；TRUST_PROXY=true 才读 XFF 首段', () => {
+    // 默认（直连部署）：XFF 即使存在也一律不读——该头可伪造，防审计 IP 被污染（审计修复 #15）
     const withFwd = new Request('http://x', { headers: { 'x-forwarded-for': '192.168.1.5, 10.0.0.1' } })
-    expect(clientIpOf(withFwd)).toBe('192.168.1.5')
+    expect(clientIpOf(withFwd)).toBe('unknown')
+    // 反代部署：显式声明信任代理后才取 XFF 首段
+    process.env.TRUST_PROXY = 'true'
+    try {
+      expect(clientIpOf(withFwd)).toBe('192.168.1.5')
+    } finally {
+      delete process.env.TRUST_PROXY
+    }
     const noFwd = new Request('http://x')
     expect(clientIpOf(noFwd)).toBe('unknown')
   })

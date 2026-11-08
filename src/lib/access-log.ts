@@ -9,7 +9,7 @@ import path from 'node:path'
 export interface AccessLogEntry {
   /** ISO 8601 访问时间 */
   time: string
-  /** 客户端 IP（反代场景取 x-forwarded-for 首段；直连取 socket 地址） */
+  /** 客户端 IP（TRUST_PROXY=true 时取 x-forwarded-for 首段；否则取 socket 地址，取不到为 unknown） */
   ip: string
   /** HTTP 方法 */
   method: string
@@ -31,41 +31,70 @@ function accessLogPath(): string {
 // 容量上限：超过即丢弃最旧条目（保留最近 MAX_ENTRIES 条）。200 条（4 页）足够回溯近期敏感操作
 const MAX_ENTRIES = 200
 
-// 从请求中提取客户端 IP：优先 x-forwarded-for 首段（反代场景，借鉴 LibreTV 惯例），
-// 回退到 Node 扩展的 socket 远端地址（直连场景）。取不到返回 'unknown'
+// 从请求中提取客户端 IP（审计修复 #15：不再默认信任 x-forwarded-for——该头可被客户端伪造，
+// 直连部署下伪造 IP 会污染审计记录。行为按部署形态二分：
+// - 直连（默认，TRUST_PROXY 未设）：读 Node 扩展的 socket 远端地址，取不到返回 'unknown'；XFF 头一律不读
+// - 反代（TRUST_PROXY=true）：前置代理可信，取 x-forwarded-for 首段（真实客户端 IP 由代理写入）
 export function clientIpOf(req: Request): string {
-  const fwd = req.headers.get('x-forwarded-for')
-  if (fwd) {
-    const first = fwd.split(',')[0]?.trim()
-    if (first !== '') return first
+  if (process.env.TRUST_PROXY === 'true') {
+    const fwd = req.headers.get('x-forwarded-for')
+    const first = fwd?.split(',')[0]?.trim()
+    if (first) return first
   }
-  // Node 的 Request 带 socket 扩展（undici 类型未暴露，运行时存在）
+  // Node 的 Request 带 socket 扩展（undici 类型未暴露，运行时存在）；App Router 下 Next 可能已把
+  // socket IP 注入 XFF，但代码语义上不再主动信任该头（仅 TRUST_PROXY=true 时读取）
   const anyReq = req as Request & { socket?: { remoteAddress?: string } }
   const addr = anyReq.socket?.remoteAddress
   return addr && addr !== '' ? addr : 'unknown'
 }
 
 // 追加一条访问记录：写失败静默吞掉——日志是辅助设施，绝不能因日志故障打断主业务响应。
-// 超容量时读旧文件 → 截取最近 MAX_ENTRIES-1 条 → 与新条目一起重写（低频写操作下开销可忽略）
+// 正常路径：fs.appendFile（内核 O_APPEND 单次 write 追加，单行原子，无需先读后写整文件）。
+// 容量压缩路径（仅当条目数达上限）：读旧文件 → 截取最近条目 → 写 .tmp → rename 原子替换；
+// 压缩经模块级 Promise 链串行化，防止并发请求同时触发「读→截断→rename」互相踩踏导致丢条目
+let compacting: Promise<void> = Promise.resolve()
+
 export async function appendAccessLog(entry: Omit<AccessLogEntry, 'time'>): Promise<void> {
   const full: AccessLogEntry = { ...entry, time: new Date().toISOString() }
   const line = JSON.stringify(full) + '\n'
   const file = accessLogPath()
   try {
     await fs.mkdir(path.dirname(file), { recursive: true })
-    let existing = ''
+    let count = 0
     try {
-      existing = await fs.readFile(file, 'utf8')
+      const raw = await fs.readFile(file, 'utf8')
+      count = raw.split('\n').filter((l) => l.trim() !== '').length
     } catch {
-      // 首次写入：文件尚不存在
+      // 首次写入：文件尚不存在，count 保持 0
     }
-    const lines = existing.split('\n').filter(l => l.trim() !== '')
-    // 超上限：丢弃最旧的（保留 MAX_ENTRIES - 1 条，给新条目腾位）
-    const kept = lines.length >= MAX_ENTRIES ? lines.slice(lines.length - (MAX_ENTRIES - 1)) : lines
-    await fs.writeFile(file, [...kept, line.trim()].join('\n') + '\n', 'utf8')
+    if (count < MAX_ENTRIES) {
+      // 未达上限：O_APPEND 单行原子追加（多进程/多请求并发下不会互相覆盖）
+      await fs.appendFile(file, line, { encoding: 'utf8' })
+      return
+    }
+    // 达上限：压缩串行队列——链在全局 Promise 上，前一个压缩完成才开始下一个
+    const run = compacting.catch(() => {}).then(() => compactFile(file, line))
+    compacting = run
+    await run
   } catch {
     // 日志写失败不打断主业务（删除/入库等操作已在前完成）
   }
+}
+
+// 压缩：读旧文件 → 丢弃最旧条目腾一位 → 写 .tmp → rename 原子替换（无中间态可见）
+async function compactFile(file: string, line: string): Promise<void> {
+  let existing = ''
+  try {
+    existing = await fs.readFile(file, 'utf8')
+  } catch {
+    // 文件被并发删除等极端场景：视作空文件重写
+  }
+  const lines = existing.split('\n').filter((l) => l.trim() !== '')
+  // 超上限：丢弃最旧的（保留 MAX_ENTRIES - 1 条，给新条目腾位）
+  const kept = lines.length >= MAX_ENTRIES ? lines.slice(lines.length - (MAX_ENTRIES - 1)) : lines
+  const tmp = `${file}.tmp`
+  await fs.writeFile(tmp, [...kept, line.trim()].join('\n') + '\n', 'utf8')
+  await fs.rename(tmp, file)
 }
 
 // 读取全部访问记录：最新在前（文件尾部是最新的，倒序返回）。文件不存在返回空数组

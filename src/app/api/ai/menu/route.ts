@@ -9,6 +9,8 @@ import { z } from 'zod'
 import { loadAiConfig, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { systemPromptWithLibrary, extractJson } from '@/lib/ai-prompts'
 import { listRecipes } from '@/lib/recipe-store'
+import type { Recipe } from '@/lib/recipe-types'
+import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
@@ -106,6 +108,8 @@ const MENU_FORMAT_RULE = [
 export async function POST(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
+  // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
+  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   const input = await parseInput(req)
   if (!input) {
     await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/menu', status: 400 })
@@ -124,8 +128,15 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
-  // 系统消息 = 人设 + 库摘要 + <menu> 格式规则；用户消息 = 人数/偏好/搭配/已有菜优先拼装
-  const { recipes } = await listRecipes()
+  // 系统消息 = 人设 + 库摘要 + <menu> 格式规则；用户消息 = 人数/偏好/搭配/已有菜优先拼装；
+  // 菜谱库读取失败（权限等）→ 500 中文（审计修复 #8）
+  let recipes: Recipe[]
+  try {
+    recipes = (await listRecipes()).recipes
+  } catch {
+    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/menu', status: 500 })
+    return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
+  }
   const system: ChatMessage = {
     role: 'system',
     content: [systemPromptWithLibrary(recipes), MENU_FORMAT_RULE].join('\n'),

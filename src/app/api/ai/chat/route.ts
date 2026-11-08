@@ -13,11 +13,17 @@ import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, CHAT_MENU_FORMAT_RULE, ext
 import { listRecipes } from '@/lib/recipe-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
+import { checkBodySize, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
 // 重试提示（与 Task 10 同款提示词模式；测试断言依赖此文案）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
+
+// chat 输入规模上限（审计修复 #4）：条数 / 单条字符 / 总字符三道闸
+const CHAT_MAX_MESSAGES = 50
+const CHAT_MAX_CONTENT_CHARS = 8000
+const CHAT_MAX_TOTAL_CHARS = 50000
 
 const OPEN_TAG = '<recipe>'
 const CLOSE_TAG = '</recipe>'
@@ -210,10 +216,42 @@ export async function POST(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
   const ip = clientIpOf(req)
+  // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
+  if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 413 })
+    return Response.json({ error: '请求体过大' }, { status: 413 })
+  }
   const messages = await parseInput(req)
   if (!messages) {
     await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
     return Response.json({ error: '参数缺失或非法：messages 须为非空的消息数组' }, { status: 400 })
+  }
+  // 输入规模上限（审计修复 #4）：条数 ≤50、单条 content ≤8000 字符、总字符 ≤50000——
+  // 防御超大对话历史把上游 token 消耗与内存放大（400 中文文案与既有 400 形态一致）
+  if (messages.length > CHAT_MAX_MESSAGES) {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
+    return Response.json(
+      { error: `消息条数过多：最多 ${CHAT_MAX_MESSAGES} 条，当前 ${messages.length} 条` },
+      { status: 400 },
+    )
+  }
+  let totalChars = 0
+  for (const m of messages) {
+    if (m.content.length > CHAT_MAX_CONTENT_CHARS) {
+      await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
+      return Response.json(
+        { error: `单条消息过长：最多 ${CHAT_MAX_CONTENT_CHARS} 字符` },
+        { status: 400 },
+      )
+    }
+    totalChars += m.content.length
+  }
+  if (totalChars > CHAT_MAX_TOTAL_CHARS) {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
+    return Response.json(
+      { error: `消息总字符过多：最多 ${CHAT_MAX_TOTAL_CHARS} 字符` },
+      { status: 400 },
+    )
   }
 
   // AI 未配置：loadAiConfig throw 中文错误 → 503（env 真实路径，测试只 mock aiChatStream/aiComplete）
@@ -226,8 +264,14 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // 系统消息 = 人设 + 库摘要 + 输出规则（<recipe> 菜谱格式 + <menu> 食材推荐清单格式，两态并存）；
-  // 其后原样转发客户端 messages
-  const { recipes } = await listRecipes()
+  // 其后原样转发客户端 messages；菜谱库读取失败（权限等）→ 500 中文（审计修复 #8）
+  let recipes: Recipe[]
+  try {
+    recipes = (await listRecipes()).recipes
+  } catch {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 500 })
+    return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
+  }
   const sent: ChatMessage[] = [
     {
       role: 'system',

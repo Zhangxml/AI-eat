@@ -46,18 +46,23 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
   const [notFound, setNotFound] = useState(false)
   const [errorText, setErrorText] = useState('')
   const [deleting, setDeleting] = useState(false)
-  // 删除保护（可选）：deleteEnabled 由 /api/config 提供；启用时点删除弹密码小窗，服务端二次校验
-  const [deleteEnabled, setDeleteEnabled] = useState(false)
+  // 删除保护（可选）：deleteEnabled 由 /api/config 提供；启用时点删除弹密码小窗，服务端二次校验。
+  // 三态：null = /api/config 尚未返回（拉取期间删除按钮禁用，防止「未启用」误判导致跳过二次确认直接删）；
+  // false = 未启用保护（浏览器 confirm 二次确认）；true = 已启用（弹密码小窗）
+  const [deleteEnabled, setDeleteEnabled] = useState<boolean | null>(null)
   const [pwdOpen, setPwdOpen] = useState(false)
   const [deletePwd, setDeletePwd] = useState('')
   const [pwdError, setPwdError] = useState('')
 
-  // 拉取删除保护开关（失败按未启用兜底：服务端 DELETE 才是强制校验点，此处只是交互分派）
+  // 拉取删除保护开关：成功写入三态；失败兜底为 null（未知态，删除按钮禁用）——
+  // 服务端 DELETE 才是强制校验点，此处只是交互分派，未知时宁可不弹窗也不误放行
   useEffect(() => {
     apiFetch('/api/config')
       .then((res) => (res.ok ? res.json() : null))
-      .then((d: { deleteEnabled?: boolean } | null) => setDeleteEnabled(Boolean(d?.deleteEnabled)))
-      .catch(() => setDeleteEnabled(false))
+      .then((d: { deleteEnabled?: boolean } | null) =>
+        setDeleteEnabled(d === null ? null : Boolean(d?.deleteEnabled)),
+      )
+      .catch(() => setDeleteEnabled(null))
   }, [])
 
   // 拉取详情：GET 200 裸 Recipe 进入详情态；404 进 404 态（提示并给回列表入口）
@@ -89,19 +94,24 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
     void loadRecipe()
   }, [loadRecipe])
 
-  // 删除分派：启用保护 → 弹密码小窗（确认时带密码调 handleDelete）；未启用 → 原 confirm 流程
+  // 删除分派：启用保护 → 弹密码小窗（确认时带密码调 handleDelete）；未启用 → 浏览器 confirm
+  // 二次确认（审计修复：此前 confirm 被误删，未启用保护时点删除会直接删除且无法恢复）；
+  // deleteEnabled === null（/api/config 未返回/失败）→ 不分派，按钮已禁用，此处仅防御
   function onDeleteClick() {
     if (!recipe || deleting) return
+    if (deleteEnabled === null) return
     if (deleteEnabled) {
       setDeletePwd('')
       setPwdError('')
       setPwdOpen(true)
       return
     }
+    if (!confirm(`确定删除「${recipe.name}」吗？删除后无法恢复。`)) return
     void handleDelete()
   }
 
-  // 删除：confirm 确认 → DELETE → 204 跳回列表；404 提示后同样回列表
+  // 删除：未启用保护时由 onDeleteClick 的 confirm 先行确认；启用保护时由密码小窗确认 →
+  // DELETE → 204 跳回列表；404 提示后同样回列表
   // 启用删除保护时 body 携带 { deletePassword }，服务端恒时比较，403 = 密码错误
   async function handleDelete(deletePassword?: string) {
     if (!recipe || deleting) return
@@ -124,7 +134,10 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
         return
       }
       if (res.status === 403) {
-        // 密码错误：留在弹窗内提示重输（服务端不区分「未提供」与「错误」，避免探测）
+        // 密码错误：留在弹窗内提示重输（服务端不区分「未提供」与「错误」，避免探测）。
+        // 兜底：confirm 流程绕过了密码小窗（如保护开关在拉取后刚被服务端启用），
+        // 此时弹窗尚未打开——强制弹出让用户能输入密码重试，而非只看到一条错误提示
+        if (!pwdOpen) setPwdOpen(true)
         setPwdError(await extractError(res, '删除密码校验失败'))
         return
       }
@@ -229,6 +242,9 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
   // 详情态兜底：recipe 理论上必非空（三态互斥），仅为类型收窄
   if (!recipe) return null
 
+  // 删除按钮：deleteEnabled === null（保护开关未返回）时禁用，避免「未启用」误判跳过二次确认
+  const deleteDisabled = deleting || deleteEnabled === null
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
       {/* 页头：菜名 + 分类徽标 + 操作按钮（编辑/删除），按钮触摸目标 ≥44px */}
@@ -254,7 +270,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
           <button
             type="button"
             onClick={onDeleteClick}
-            disabled={deleting}
+            disabled={deleteDisabled}
             className="shrink-0 rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 transition-colors active:bg-red-50 disabled:opacity-60 dark:border-red-900 dark:text-red-400 dark:active:bg-red-950"
           >
             {deleting ? '删除中…' : '删除'}

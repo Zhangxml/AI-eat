@@ -39,6 +39,8 @@ docker compose up -d --build    # 宿主机 8888 → 容器 3000，./data 挂载
 
 `.env`（gitignore 排除）→ 裸机由 shell 读，Docker 由 compose `env_file + environment 透传`。变量清单见 `.env.example`（AI 三项/PASSWORD/DELETE_ENABLED/DELETE_PASSWORD）。
 
+`AI_EAT_DATA_DIR` 语义说明（审计修复 #9）：该变量**特指菜谱库目录**（data/recipes 的位置），不影响其他文件落点——访问日志固定写在其父目录的 `logs/` 子目录（`data/logs/access.jsonl`），与菜谱库同级、同受数据卷保护；行为不变，仅文档化。
+
 ### 端口约定
 
 裸机 `PORT` 默认 **8888**（可用环境变量覆盖）；Docker 容器内固定 3000、宿主机映射 8888。`HOSTNAME=0.0.0.0` 监听所有网卡是局域网设备可达的前提。

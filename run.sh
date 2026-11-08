@@ -25,7 +25,7 @@ is_running() {
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
-# 端口探测：等 node 服务端接受连接（最多 60 次 × 1s）
+# 端口就绪等待：等 node 服务端接受连接（最多 60 次 × 1s）——启动后的就绪等待用
 wait_port() {
   for _ in $(seq 1 60); do
     if node -e "const n=require('net');const s=n.connect(${PORT},'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),800)" 2>/dev/null; then
@@ -34,6 +34,13 @@ wait_port() {
     sleep 1
   done
   return 1
+}
+
+# 端口占用预检：单次探测（审计修复 #10）——启动前检查端口是否已被监听。
+# 不复用 wait_port：循环等待最长 60 秒，仅适合「等服务起来」；预检要的是即时结论，
+# 端口空闲立即失败、被占用立即拒绝启动
+port_in_use() {
+  node -e "const n=require('net');const s=n.connect(${PORT},'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),800)" 2>/dev/null
 }
 
 stop_server() {
@@ -63,8 +70,8 @@ start_server() {
     exit 0
   fi
   rm -f "$PID_FILE"
-  # 端口被无关进程占用时及早失败，不产生误导性的启动日志
-  if wait_port; then
+  # 端口被无关进程占用时及早失败，不产生误导性的启动日志（单次探测，见 port_in_use）
+  if port_in_use; then
     echo "端口 ${PORT} 已被其他进程占用，拒绝启动（可用 PORT=xxx ./run.sh 换端口）"
     exit 1
   fi

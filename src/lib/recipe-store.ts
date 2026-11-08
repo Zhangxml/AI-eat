@@ -40,16 +40,22 @@ async function atomicWrite(file: string, data: string): Promise<void> {
   }
 }
 
-// 列出全部菜谱：非法 JSON / schema 不合法 / 非 .json 文件跳过并进 invalidFiles；按 updatedAt 降序
+// 列出全部菜谱：非法 JSON / schema 不合法 / 非 .json 文件跳过并进 invalidFiles；按 updatedAt 降序。
+// 错误分级（审计修复 #8）：readdir 仅 ENOENT（目录不存在，全新部署首跑常态）返回空库；
+// 其余 errno（EACCES 权限、EIO 等）一律 throw——静默吞掉会让用户误以为「菜谱全没了」，
+// 而实际是权限/磁盘故障，必须让上层（route）感知并返回 500 提示排查
 export async function listRecipes(
   dir: string = recipesDir(),
 ): Promise<{ recipes: Recipe[]; invalidFiles: string[] }> {
   let entries: string[]
   try {
     entries = await fs.readdir(dir)
-  } catch {
-    // 目录不存在视为空库，不崩溃
-    return { recipes: [], invalidFiles: [] }
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      // 目录不存在视为空库，不崩溃
+      return { recipes: [], invalidFiles: [] }
+    }
+    throw e
   }
   const recipes: Recipe[] = []
   const invalidFiles: string[] = []

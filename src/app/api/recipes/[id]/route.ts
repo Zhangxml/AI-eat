@@ -2,6 +2,7 @@
 import { getRecipe, updateRecipe, deleteRecipe } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe } from '@/lib/recipe-types'
+import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { timingSafeEqual } from 'node:crypto'
@@ -29,11 +30,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   return Response.json(recipe)
 }
 
-// PUT /api/recipes/:id（body: DraftRecipe）→ 200 Recipe | 400 { error } | 404 { error }
+// PUT /api/recipes/:id（body: DraftRecipe）→ 200 Recipe | 400 { error } | 404 { error } | 413（超 1MB）
 export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const denied = requireAuth(req)
   if (denied) return denied
   const { id } = await ctx.params
+  // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
+  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   const draft = await parseDraft(req)
   if (!draft) {
     // 访问日志（方案 A：写操作；400 也如实记录）
@@ -55,6 +58,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
 export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const denied = requireAuth(req)
   if (denied) return denied
+  // body 体积前置闸门（审计修复 #4）：删除密码 body 极小，超 1MB 必然非法，不进解析
+  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   const ip = clientIpOf(req)
   // 删除保护开关：显式 DELETE_ENABLED=true 且密码非空才启用（两个条件缺一不可，防只配一半半失效）
   const deleteGuardEnabled = process.env.DELETE_ENABLED === 'true' && Boolean(process.env.DELETE_PASSWORD)

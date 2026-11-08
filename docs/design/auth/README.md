@@ -15,6 +15,8 @@
 | **访问鉴权** | `PASSWORD` | 整站读写：未登录访问任何受保护接口 → 401，前端跳登录页 |
 | **删除保护** | `DELETE_ENABLED=true` + `DELETE_PASSWORD` | 仅删除操作：删菜谱必须携带正确密码 → 403 拒绝 |
 
+另有 `TRUST_PROXY=true`（可选）：仅在前置反向代理可信时设置，访问日志的 IP 提取才会读 `x-forwarded-for` 首段；默认不设置（直连部署），XFF 一律不读、取 socket 远端地址（详见「访问记录」一节）。
+
 ## 怎么做的
 
 ### 登录会话（PASSWORD 层）
@@ -43,7 +45,7 @@ DELETE /api/recipes/:id（启用时要求 body { deletePassword }）
 ```
 
 - 开关判定：`DELETE_ENABLED === 'true' && DELETE_PASSWORD 非空`（两项缺一视为未启用，防半配半失效）
-- 前端交互：`/api/config` 的 `deleteEnabled` 字段分派——启用时详情页弹密码小窗（Enter 确认/Esc 关闭，403 留窗内提示重输）；未启用保持 confirm 流程
+- 前端交互：`/api/config` 的 `deleteEnabled` 字段分派——启用时详情页弹密码小窗（Enter 确认/Esc 关闭，403 强制弹窗提示重输，含小窗未打开的兜底）；未启用时浏览器 confirm 二次确认后才发起 DELETE；开关未返回（null）期间删除按钮禁用
 - **服务端校验是强制点**：前端弹窗只收集输入，绕过 UI 直接调 API 同样 403
 
 ### 状态可见性
@@ -54,11 +56,11 @@ DELETE /api/recipes/:id（启用时要求 body { deletePassword }）
 
 设置页「访问记录」入口 → `/access-logs` 列表页（时间/IP/方法/路径/状态码，最新在前）。
 
-- **记录范围**：只记写操作与敏感操作——菜谱 POST/PUT/DELETE（含删除保护 403）、AI 生成/点菜/聊天（含失败）、备份导入（附 imported 计数）、登录尝试（含 401——连续 401 是「有人乱试口令」的审计线索）；普通读请求（列表/详情浏览）不记
-- **存储**：`data/logs/access.jsonl`（JSON Lines 追加写），与菜谱库同受 data 卷保护；上限 200 条滚动丢弃最旧（4 页即看完全部），文件永不无限增长
+- **记录范围**：只记写操作与敏感操作——菜谱 POST/PUT/DELETE（含删除保护 403）、AI 生成/点菜/聊天（含失败）、备份导入（附 imported 计数）、登录尝试（含 401——连续 401 是「有人乱试口令」的审计线索，同 IP 60 秒节流只记首条防枚举刷满窗口）；普通读请求（列表/详情浏览）不记
+- **存储**：`data/logs/access.jsonl`（JSON Lines），与菜谱库同受 data 卷保护；正常路径 `fs.appendFile`（O_APPEND 单行原子追加），达上限 200 条时「读→截断→tmp→rename」压缩且经模块级 Promise 队列串行，滚动丢弃最旧（4 页即看完全部），文件永不无限增长
 - **展示分页**：列表页前端分页（50 条/页，「上一页/下一页」+「第 N / M 页 · 共 X 条」指示）——数据一次拉全量（上限 200 条传输极小），切片渲染避免长列表；刷新重置回第一页
 - **隐私红线**：不含任何密码/Key/查询参数（搜索词不记录）；删除保护 403 的路径不带 id（密码未验过，id 不可信）；日志写失败静默吞掉，绝不打断主业务响应
-- **IP 提取**：`x-forwarded-for` 首段优先（反代场景），回退 socket 远端地址
+- **IP 提取**：默认不信任 `x-forwarded-for`（该头可伪造，直连部署下会污染审计），读 socket 远端地址、取不到为 `unknown`；`TRUST_PROXY=true`（前置反代可信）时才取 XFF 首段
 - 读接口 `GET /api/access-logs` 受 PASSWORD 守卫保护，且自身不写日志
 
 ## 为什么这么做

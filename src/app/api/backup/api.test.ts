@@ -188,4 +188,24 @@ describe('备份接口 /api/backup', () => {
     expect(await getRecipe(baseRecipe.id)).toEqual(baseRecipe)
     expect(await getRecipe(otherRecipe.id)).toEqual(otherRecipe)
   })
+
+  it('recipes 超过 5000 条 → 400 中文（审计修复 #4），不触发逐条导入', async () => {
+    // 构造 5001 条极简占位条目（条数上限校验先于逐条校验，元素内容不影响断言）
+    const recipes = Array.from({ length: 5001 }, (_, i) => ({ id: `x-${i}` }))
+    const res = await POST(jsonReq({ recipes }))
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toMatch(/备份条目过多/)
+  })
+
+  it('content-length 超 5MB → 413 { error: 请求体过大 }（审计修复 #4）', async () => {
+    const res = await POST(
+      new Request('http://x/api/backup', {
+        method: 'POST',
+        body: JSON.stringify({ recipes: [] }),
+        headers: { 'content-type': 'application/json', 'content-length': String(5 * 1024 * 1024 + 1) },
+      }),
+    )
+    expect(res.status).toBe(413)
+    expect(((await res.json()) as { error: string }).error).toBe('请求体过大')
+  })
 })

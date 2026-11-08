@@ -35,7 +35,7 @@ RecipeForm({ initial?: Recipe; onSubmit: (draft) => Promise<Response>; submitLab
 | toDraft 剥离 | id/createdAt/updatedAt 不进 DraftRecipe（strict schema 多一字段即 400）；source 保留 |
 | 守卫顺序 | 详情页四态：notFound/error 终态守卫**必须**排在 loading 之前（失败时 mode 保持 loading，否则被「加载中」永久遮挡——有注释说明因果） |
 | 步骤输入框 auto-grow | textarea `rows` 只算显式换行不算自动折行，AI 长步骤被裁剪出内部滚动条（与页面滚动冲突）→ `StepTextarea` 用 ref 实测 scrollHeight 撑高，value 变化（手动/AI 回填）都重算 |
-| 删除分派 | `deleteEnabled`（来自 /api/config）为 true 时弹密码小窗（服务端二次校验），否则原 confirm 流程；403 留在弹窗提示重输 |
+| 删除分派 | `deleteEnabled`（来自 /api/config）为 true 时弹密码小窗（服务端二次校验），为 false 时浏览器 confirm 二次确认（确定删除「菜名」吗？删除后无法恢复），null（开关未返回）期间删除按钮禁用；403 强制弹窗提示重输 |
 
 ### 列表页
 

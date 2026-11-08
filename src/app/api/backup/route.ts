@@ -12,8 +12,12 @@ import { z } from 'zod'
 import { listRecipes, getRecipe, putRecipe } from '@/lib/recipe-store'
 import { validateRecipe } from '@/lib/recipe-types'
 import type { Recipe } from '@/lib/recipe-types'
+import { checkBodySize, bodyTooLarge, BACKUP_BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
+
+// 备份导入条数上限（审计修复 #4）：防御超大备份拖垮逐条导入循环
+const BACKUP_MAX_RECIPES = 5000
 
 // 顶层结构 schema：只约束「recipes 键存在且为数组」，元素类型 unknown 交由逐条校验，
 // 不加 .strict()——顶层多余字段（如手改文件加的备注键）容忍，不卡死整体
@@ -29,11 +33,16 @@ function backupDateString(now: Date): string {
   return `${y}${m}${d}`
 }
 
-// GET /api/backup → 200 { exportedAt; recipes } + attachment 头
+// GET /api/backup → 200 { exportedAt; recipes } + attachment 头；菜谱库读取失败 → 500 中文（审计修复 #8）
 export async function GET(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
-  const { recipes } = await listRecipes()
+  let recipes: Recipe[]
+  try {
+    recipes = (await listRecipes()).recipes
+  } catch {
+    return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
+  }
   const body = JSON.stringify({ exportedAt: new Date().toISOString(), recipes })
   return new Response(body, {
     status: 200,
@@ -73,12 +82,14 @@ async function importOne(item: unknown, index: number): Promise<ItemResult> {
   return { imported: true, skipId: null, reason: null }
 }
 
-// POST /api/backup → 逐条导入 → 200 { imported; skipped; skippedIds; invalidIds } | 400 { error }
+// POST /api/backup → 逐条导入 → 200 { imported; skipped; skippedIds; invalidIds } | 400 { error } | 413（超 5MB）
 // 访问日志（方案 A）：导入是批量写操作，成功/失败都记录
 export async function POST(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
   const ip = clientIpOf(req)
+  // body 体积前置闸门（审计修复 #4）：备份整库合法体积更大，上限放宽到 5MB
+  if (!checkBodySize(req, BACKUP_BODY_LIMIT_BYTES)) return bodyTooLarge()
   let body: unknown
   try {
     body = await req.json()
@@ -91,6 +102,14 @@ export async function POST(req: Request): Promise<Response> {
   if (!parsed.success) {
     await appendAccessLog({ ip, method: 'POST', path: '/api/backup', status: 400 })
     return Response.json({ error: '备份文件结构非法：缺少 recipes 数组' }, { status: 400 })
+  }
+  // 条数上限（审计修复 #4）：recipes 超过 5000 条整体 400 中文
+  if (parsed.data.recipes.length > BACKUP_MAX_RECIPES) {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/backup', status: 400 })
+    return Response.json(
+      { error: `备份条目过多：最多 ${BACKUP_MAX_RECIPES} 条，当前 ${parsed.data.recipes.length} 条` },
+      { status: 400 },
+    )
   }
 
   // 逐条处理：非法条目跳过并报告，不中断整体导入

@@ -432,4 +432,56 @@ describe('POST /api/ai/chat', () => {
     expect(frames.some(f => f.event === 'menu')).toBe(false)
     expect(frames[frames.length - 1].event).toBe('done')
   })
+
+  // —— 输入规模上限（审计修复 #4）——
+
+  it('messages 超过 50 条 → 400 中文，不触发任何 AI 调用', async () => {
+    const messages = Array.from({ length: 51 }, (_, i) => ({
+      role: 'user' as const,
+      content: `第 ${i} 条`,
+    }))
+    const res = await POST(jsonReq({ messages }))
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toMatch(/消息条数过多/)
+    expect(aiChatStreamMock).not.toHaveBeenCalled()
+  })
+
+  it('单条 content 超 8000 字符 → 400 中文；恰好 8000 字符放行', async () => {
+    const tooLong = 'a'.repeat(8001)
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: tooLong }] }))
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toMatch(/单条消息过长/)
+    expect(aiChatStreamMock).not.toHaveBeenCalled()
+    // 边界：恰好 8000 走正常路径（mock 上游，200 SSE）
+    aiChatStreamMock.mockResolvedValueOnce(
+      sseResponse(deltaFrame('ok') + DONE_FRAME),
+    )
+    const ok = await POST(jsonReq({ messages: [{ role: 'user', content: 'a'.repeat(8000) }] }))
+    expect(ok.status).toBe(200)
+  })
+
+  it('messages 总字符超 50000 → 400 中文（单条均不超限）', async () => {
+    // 50 条 × 1100 字符 = 55000 > 50000，且每条 ≤ 8000
+    const messages = Array.from({ length: 50 }, (_, i) => ({
+      role: 'user' as const,
+      content: 'b'.repeat(1100) + String(i), // 唯一化避免去重疑虑
+    }))
+    const res = await POST(jsonReq({ messages }))
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toMatch(/消息总字符过多/)
+    expect(aiChatStreamMock).not.toHaveBeenCalled()
+  })
+
+  it('content-length 超 1MB → 413 { error: 请求体过大 }，不解析 body 不触发 AI', async () => {
+    const res = await POST(
+      new Request('http://x/api/ai/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+        headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024 + 1) },
+      }),
+    )
+    expect(res.status).toBe(413)
+    expect(((await res.json()) as { error: string }).error).toBe('请求体过大')
+    expect(aiChatStreamMock).not.toHaveBeenCalled()
+  })
 })

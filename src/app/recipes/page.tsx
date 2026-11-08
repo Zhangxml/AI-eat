@@ -46,7 +46,11 @@ export default function RecipesPage() {
       if (query.trim()) params.set('q', query.trim())
       if (activeTag) params.set('tag', activeTag)
       const res = await apiFetch(`/api/recipes?${params.toString()}`)
-      if (!res.ok) return
+      // 非 2xx：顶部错误条展示 HTTP 码（审计修复 #11——此前静默 return，列表停在旧数据/空态无任何提示）
+      if (!res.ok) {
+        if (id === requestIdRef.current) setLoadError(`加载失败（HTTP ${res.status}），请稍后重试`)
+        return
+      }
       const data = (await res.json()) as ListResponse
       // 丢弃过期响应，只保留最后一次请求结果
       if (id !== requestIdRef.current) return
@@ -110,11 +114,15 @@ export default function RecipesPage() {
       </div>
 
       {/* 标签 chips：默认只显示使用频次最高的前 10 个（标签来自 AI/人工录入，数量不可控，
-          全量铺开会把筛选区撑成无限长）；「更多」展开/收起全部。选中态的标签即使不在前 10 也强制显示，
-          避免展开状态下取消选中后该标签从界面上消失 */}
+          全量铺开会把筛选区撑成无限长）；「更多」展开/收起全部。
+          审计修复 #12：渲染列表 = 前 10 个 ∪（该标签被选中时强制并入）——选中态标签收起后仍显示，
+          否则用户点中第 11 位之后的标签再收起，唯一可取消选中的入口会从界面上消失 */}
       {allTags.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
-          {(showAllTags ? allTags : allTags.slice(0, TAG_CHIPS_LIMIT)).map((t) => (
+          {((): string[] => {
+            const shown = showAllTags ? allTags : allTags.slice(0, TAG_CHIPS_LIMIT)
+            return tag !== null && !shown.includes(tag) ? [...shown, tag] : shown
+          })().map((t) => (
             <button
               key={t}
               type="button"

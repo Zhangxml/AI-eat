@@ -93,4 +93,41 @@ describe('AI 客户端', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions')
     expect(fetchMock.mock.calls[1][0]).toBe('https://api.deepseek.com/chat/completions')
   })
+
+  it('fetch 挂 120 秒 AbortSignal.timeout（审计修复 #5）', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(okResponse({ choices: [{ message: { content: 'x' } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await aiComplete(cfg, [{ role: 'user', content: 'hi' }])
+    const init = fetchMock.mock.calls[0][1] as RequestInit & { signal?: AbortSignal }
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+    expect(init.signal?.aborted).toBe(false)
+  })
+
+  it('上游超时（TimeoutError/AbortError）→ 错误消息含「AI 上游超时」（审计修复 #5）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new DOMException('The operation was timed out', 'TimeoutError')),
+    )
+    await expect(aiComplete(cfg, [{ role: 'user', content: 'hi' }])).rejects.toThrow(
+      'AI 上游超时（120 秒无响应）',
+    )
+    await expect(aiChatStream(cfg, [{ role: 'user', content: 'hi' }])).rejects.toThrow(/AI 上游超时/)
+  })
+
+  it('上游超时的 abort 类错误（AbortError）同样翻译为「AI 上游超时」', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new DOMException('This operation was aborted', 'AbortError')),
+    )
+    await expect(aiComplete(cfg, [{ role: 'user', content: 'hi' }])).rejects.toThrow(/AI 上游超时/)
+  })
+
+  it('其他网络层异常翻译为「AI 上游连接失败」并带原始消息', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')))
+    await expect(aiComplete(cfg, [{ role: 'user', content: 'hi' }])).rejects.toThrow(
+      /AI 上游连接失败：ECONNREFUSED/,
+    )
+  })
 })

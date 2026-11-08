@@ -207,7 +207,10 @@ export default function RecipeForm({
 
   // AI 估算营养（裁定 3）：调 POST /api/ai/recipes，取 recipe.nutrition 回填四项
   async function handleEstimate() {
-    if (aiDisabled) return    setEstimating(true)
+    // ASI 修复：return 必须独占一行——原写法 `if (aiDisabled) return    setEstimating(true)`
+    // 会被解析为 `return setEstimating(true)`，aiDisabled 时 setEstimating 永不执行反而被当返回值
+    if (aiDisabled) return
+    setEstimating(true)
     try {
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
@@ -252,9 +255,12 @@ export default function RecipeForm({
   // AI 整份生成（按名称）：调 POST /api/ai/recipes { dish: 名称 }，成功后把整份菜谱回填表单各字段。
   // 只回填不保存：source 保持 'manual'（用户核对修改后手动保存，保存动作仍走表单提交），
   // 营养/分类由 AI 结果带入但用户可随意改；名称为唯一必要输入。
+  // aiBusy 统一三个互斥请求进行中标志（提交/估算/生成）：估算按钮与 aiDisabled 共用同一口径，
+  // 任一 AI 请求进行中都不允许触发第二个（避免并发回填互相覆盖表单字段）
+  const aiBusy = submitting || estimating || generating
   async function handleGenerate() {
     const trimName = name.trim()
-    if (trimName === '' || generating || submitting || estimating) return
+    if (trimName === '' || aiBusy) return
     setGenerating(true)
     try {
       const res = await apiFetch('/api/ai/recipes', {
@@ -355,7 +361,7 @@ export default function RecipeForm({
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={generating || submitting || estimating || name.trim() === ''}
+            disabled={aiBusy || name.trim() === ''}
             aria-label="AI 生成菜谱"
             className={compactBtn}
           >

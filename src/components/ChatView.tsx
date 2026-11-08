@@ -24,9 +24,10 @@ interface ChatItem {
   error?: string // 生成失败时 assistant 气泡内的红字提示
 }
 
-// 推荐清单中某道菜的逐菜状态：无记录=未生成；generating=生成中；recipe=已生成（挂卡片）
+// 推荐清单中某道菜的逐菜状态：无记录=未生成；generating=生成中；ready=已生成（挂卡片）；
+// 失败/异常后回 idle（携带 error 红字），按钮恢复可点允许重试（审计修复 #3）
 interface MenuDishState {
-  phase: 'generating' | 'ready'
+  phase: 'idle' | 'generating' | 'ready'
   recipe?: Recipe
   error?: string
 }
@@ -75,6 +76,12 @@ export default function ChatView() {
   const [dishStates, setDishStates] = useState<Record<string, MenuDishState>>({})
   // 自动滚底：气泡区 ref，增量/卡片/错误到达时滚动到底
   const scrollRef = useRef<HTMLDivElement>(null)
+  // 请求取消（审计修复）：进行中的 chat / 逐菜生成请求统一挂到当前 AbortController 上，
+  // 组件卸载时 abort，避免卸载后 setState（React 警告与无谓更新）。ref 保活，回调读到最新实例
+  const abortRef = useRef<AbortController | null>(null)
+  useEffect(() => {
+    return () => abortRef.current?.abort()
+  }, [])
 
   // 自动滚底：items 变化（含流式增量）后滚到最底，解决软键盘遮挡下最新内容可见性
   useEffect(() => {
@@ -122,14 +129,20 @@ export default function ChatView() {
   async function generateDish(msgIdx: number, dishName: string) {
     const key = `${msgIdx}:${dishName}`
     const st = dishStates[key]
+    // 守卫只拦「生成中」与「已就绪有菜谱」（防重复触发）；idle 或 ready-but-error（失败态）允许再次点击重试
     if (st && (st.phase === 'generating' || (st.phase === 'ready' && st.recipe))) return
     setDishStates((prev) => ({ ...prev, [key]: { phase: 'generating' } }))
     try {
+      const controller = new AbortController()
+      abortRef.current = controller
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dish: dishName }),
+        signal: controller.signal,
       })
+      // 卸载触发的 abort：请求结果作废，不再 setState
+      if (controller.signal.aborted) return
       if (res.ok) {
         // /api/ai/recipes 200 为 { recipe } 包裹形状（与 /api/recipes 入库接口的裸 Recipe 不同）
         const data = (await res.json()) as { recipe: Recipe }
@@ -143,9 +156,12 @@ export default function ChatView() {
       } catch {
         // 保留默认文案
       }
-      setDishStates((prev) => ({ ...prev, [key]: { phase: 'generating', error: msg } }))
+      // 失败回 idle（而非停在 generating）：按钮恢复可点，允许用户直接重试
+      setDishStates((prev) => ({ ...prev, [key]: { phase: 'idle', error: msg } }))
     } catch {
-      setDishStates((prev) => ({ ...prev, [key]: { phase: 'generating', error: '网络异常，请稍后重试' } }))
+      // 网络异常同样回 idle 允许重试；卸载触发的 abort 不再 setState
+      if (abortRef.current?.signal.aborted) return
+      setDishStates((prev) => ({ ...prev, [key]: { phase: 'idle', error: '网络异常，请稍后重试' } }))
     }
   }
 
@@ -165,10 +181,13 @@ export default function ChatView() {
       setItems((prev) => prev.map((it, i) => (i === idx ? fn(it) : it)))
 
     try {
+      const controller = new AbortController()
+      abortRef.current = controller
       const res = await apiFetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: history }),
+        signal: controller.signal,
       })
       if (!res.ok) {
         // 非 SSE 错误形态（400/502/503 等 { error: 中文 }）：直接读 JSON 显示在气泡内
@@ -201,7 +220,8 @@ export default function ChatView() {
         // done：无需处理，finally 解锁输入
       })
     } catch {
-      // fetch 本身抛错（网络断开等）
+      // fetch 本身抛错（网络断开等）；abort（组件卸载）后不再 setState，避免卸载后更新
+      if (abortRef.current?.signal.aborted) return
       patch((it) => ({ ...it, error: '网络异常，请稍后重试' }))
     } finally {
       setPending(false)

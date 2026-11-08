@@ -174,6 +174,16 @@ describe('菜谱文件存储', () => {
     expect(await listRecipes(notExist)).toEqual({ recipes: [], invalidFiles: [] })
   })
 
+  it('listRecipes 错误分级（审计修复 #8）：ENOENT 空库；其余 errno（如 EACCES/普通文件路径）throw', async () => {
+    // ENOENT：全新部署首跑常态，保持空库语义（既有用例已覆盖，这里保留显式断言）
+    const notExist = path.join(dir, 'not-exist-either')
+    expect(await listRecipes(notExist)).toEqual({ recipes: [], invalidFiles: [] })
+    // 非 ENOENT：路径是一个普通文件（readdir 得 ENOTDIR）→ 必须 throw，不得静默当空库
+    const filePath = path.join(dir, 'plain-file')
+    await fs.writeFile(filePath, 'x', 'utf8')
+    await expect(listRecipes(filePath)).rejects.toThrow()
+  })
+
   it('filterRecipes：q 命中名称或食材名，tag 精确', async () => {
     const a = makeRecipe('r-a', '番茄炒蛋', ['家常菜'], ['番茄', '鸡蛋'])
     const b = makeRecipe('r-b', 'Beef Salad', ['西式'], ['BEEF', 'Lettuce'])

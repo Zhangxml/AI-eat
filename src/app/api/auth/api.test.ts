@@ -1,6 +1,7 @@
 // /api/auth 路由单测（Task 16）：POST 登录签发会话 Cookie / GET 查询鉴权开关
 // env 用快照接管 + afterEach 恢复（PASSWORD 影响签发与校验两侧）
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { promises as fs } from 'node:fs'
 import { POST, GET } from './route'
 import { isValidToken, SESSION_COOKIE } from '@/lib/auth'
 
@@ -92,5 +93,49 @@ describe('/api/auth', () => {
   it('GET：PASSWORD 已设 → { enabled: true }（登录页判断用，不受守卫保护）', async () => {
     const res = await GET()
     expect(await res.json()).toEqual({ enabled: true })
+  })
+
+  it('401 登录失败日志 60 秒节流（审计修复 #7）：同 IP 只记首条，窗口外恢复', async () => {
+    // 用真实 appendAccessLog 落盘验证；用独立 XFF IP 作节流键（TRUST_PROXY=true 打开 XFF 读取），
+    // 避免与同文件其他 401 用例共享 'unknown' 键而撞上已开启的 60 秒窗口
+    const dataDir = await fs.mkdtemp('/tmp/opencode/ai-eat-auth-')
+    process.env.AI_EAT_DATA_DIR = `${dataDir}/data/recipes`
+    process.env.TRUST_PROXY = 'true'
+    const postFrom = (ip: string, password: unknown) =>
+      new Request('http://x/api/auth', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
+      })
+    try {
+      // 首次 401：记 1 条；紧接着两次 401：60 秒窗口内被节流，不再追加
+      await POST(postFrom('10.99.99.1', 'wrong'))
+      await POST(postFrom('10.99.99.1', 'wrong'))
+      await POST(postFrom('10.99.99.1', 'wrong'))
+      const { readAccessLogs } = await import('@/lib/access-log')
+      const failLogs = (await readAccessLogs()).filter(l => l.status === 401)
+      expect(failLogs).toHaveLength(1)
+      expect(failLogs[0].ip).toBe('10.99.99.1')
+      // 成功登录照常记录（200 不受节流影响）
+      await POST(postFrom('10.99.99.1', 'p'))
+      const okLogs = (await readAccessLogs()).filter(l => l.status === 200)
+      expect(okLogs).toHaveLength(1)
+    } finally {
+      delete process.env.TRUST_PROXY
+      await fs.rm(dataDir, { recursive: true, force: true })
+      delete process.env.AI_EAT_DATA_DIR
+    }
+  })
+
+  it('content-length 超 1MB → 413（审计修复 #4），不进入密码校验', async () => {
+    const res = await POST(
+      new Request('http://x/api/auth', {
+        method: 'POST',
+        body: JSON.stringify({ password: 'p' }),
+        headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024 + 1) },
+      }),
+    )
+    expect(res.status).toBe(413)
+    expect(((await res.json()) as { error: string }).error).toBe('请求体过大')
   })
 })
