@@ -1,8 +1,10 @@
-# 模块：鉴权（PASSWORD 登录 + 删除保护）
+# 模块：鉴权（PASSWORD 登录 + 删除保护）+ 访问记录
 
-> 代码位置：`src/lib/auth.ts`（会话与口令）、`src/app/api/auth/route.ts`（登录接口）、
-> `src/app/login/page.tsx`（登录页）、`src/app/api/config/route.ts`（开关状态）、`src/lib/api-fetch.ts`（前端 401 处理）
-> 守卫范围：/api/recipes*、/api/ai/*、/api/backup、/api/config
+> 代码位置：`src/lib/auth.ts`（会话与口令）、`src/lib/access-log.ts`（访问日志）、
+> `src/app/api/auth/route.ts`（登录接口）、`src/app/login/page.tsx`（登录页）、
+> `src/app/api/config/route.ts`（开关状态）、`src/lib/api-fetch.ts`（前端 401 处理）、
+> `src/app/api/access-logs/route.ts`（日志读取）、`src/app/access-logs/page.tsx`（访问记录列表页）
+> 守卫范围：/api/recipes*、/api/ai/*、/api/backup、/api/config、/api/access-logs
 
 ## 做什么
 
@@ -47,6 +49,16 @@ DELETE /api/recipes/:id（启用时要求 body { deletePassword }）
 ### 状态可见性
 
 `GET /api/config` 回显 `{ authEnabled, deleteEnabled }` → 设置页两张状态卡片（「访问鉴权」「删除保护」），一眼确认安全状态；**绝不回显任何密码/key**（红线测试锁定字段名与注入值双断言）。
+
+### 访问记录（方案 A：敏感操作审计）
+
+设置页「访问记录」入口 → `/access-logs` 列表页（时间/IP/方法/路径/状态码，最新在前）。
+
+- **记录范围**：只记写操作与敏感操作——菜谱 POST/PUT/DELETE（含删除保护 403）、AI 生成/点菜/聊天（含失败）、备份导入（附 imported 计数）、登录尝试（含 401——连续 401 是「有人乱试口令」的审计线索）；普通读请求（列表/详情浏览）不记
+- **存储**：`data/logs/access.jsonl`（JSON Lines 追加写），与菜谱库同受 data 卷保护；上限 1000 条滚动丢弃最旧，文件永不无限增长
+- **隐私红线**：不含任何密码/Key/查询参数（搜索词不记录）；删除保护 403 的路径不带 id（密码未验过，id 不可信）；日志写失败静默吞掉，绝不打断主业务响应
+- **IP 提取**：`x-forwarded-for` 首段优先（反代场景），回退 socket 远端地址
+- 读接口 `GET /api/access-logs` 受 PASSWORD 守卫保护，且自身不写日志
 
 ## 为什么这么做
 
