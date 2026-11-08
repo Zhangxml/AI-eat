@@ -129,17 +129,28 @@ describe('POST /api/ai/menu', () => {
     expect(sysMsg.role).toBe('system')
     expect(sysMsg.content).toContain('<menu>')
     expect(sysMsg.content).toContain('番茄炒蛋｜食材:番茄,鸡蛋')
-    // 用户消息含人数 / 偏好 / 荤素搭配 / 创意约束 + 每次随机灵感方向；不再要求优先已有菜
+    // 用户消息含人数 / 偏好 / 荤素搭配 / 家常档位约束（默认 home：经典家常优先，不注入反大路菜黑名单）
+    // + 每次随机灵感方向；不再要求优先已有菜
     expect(userMsg.role).toBe('user')
     expect(userMsg.content).toContain('3 人')
     expect(userMsg.content).toContain('清淡')
     expect(userMsg.content).toContain('荤素搭配')
-    expect(userMsg.content).toContain('避免番茄炒蛋')
+    expect(userMsg.content).toContain('经典家常菜')
     expect(userMsg.content).toContain('本次灵感方向')
     expect(userMsg.content).not.toContain('已有菜谱')
     expect(userMsg.content).not.toContain('优先考虑')
     // 温度分层：买什么菜单固定 0.8（环境变量未覆盖）
     expect(aiCompleteMock.mock.calls[0][2]).toEqual({ temperature: 0.8 })
+  })
+
+  it('style=creative 时用户消息注入反大路菜约束（替换家常档位句）', async () => {
+    aiCompleteMock.mockResolvedValueOnce(aiOk)
+    const res = await POST(jsonReq({ people: 3, style: 'creative' }))
+    expect(res.status).toBe(200)
+    const userMsg = aiCompleteMock.mock.calls[0][1][1]
+    expect(userMsg.content).toContain('避免番茄炒蛋')
+    // creative 档不再说「经典家常菜为主」
+    expect(userMsg.content).not.toContain('经典家常菜为主')
   })
 
   it('people=4 时用户消息附份量级提示（建议菜数不少于 4 道）', async () => {

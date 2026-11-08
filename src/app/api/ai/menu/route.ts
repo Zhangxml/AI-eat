@@ -14,7 +14,7 @@ import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { resolveTemperature } from '@/lib/ai-temperatures'
-import { pickInspiration } from '@/lib/inspiration'
+import { pickInspiration, type InspirationStyle } from '@/lib/inspiration'
 
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案，与 Task 10/11 同款）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
@@ -57,7 +57,7 @@ function extractMenuJson(text: string): z.infer<typeof menuSchema> | null {
 // 读取 JSON body 并做参数校验；非法返回 null（route 层转 400）
 async function parseInput(
   req: Request,
-): Promise<{ people: number; preference?: string } | null> {
+): Promise<{ people: number; preference?: string; style: InspirationStyle } | null> {
   let body: unknown
   try {
     body = await req.json()
@@ -80,12 +80,19 @@ async function parseInput(
     if (trimmed.length > MAX_TEXT_CHARS) return null
     if (trimmed !== '') preference = trimmed
   }
-  return { people: b.people, preference }
+  // style：可选档位，'creative' 之外一律回落 home（含未提供/空串）
+  const style: InspirationStyle = b.style === 'creative' ? 'creative' : 'home'
+  return { people: b.people, preference, style }
 }
 
-// 组装用户消息：人数（含份量级提示：people≥4 建议菜数不少于人数）、口味偏好、荤素搭配、创意约束 + 灵感方向。
+// 组装用户消息：人数（含份量级提示：people≥4 建议菜数不少于人数）、口味偏好、荤素搭配、
+// 风格档位约束（home=经典家常优先 / creative=中式创意）+ 灵感方向。
 // 说明：已移除「菜谱库已有菜优先」要求（产品决定）——菜单追求新意，不因库中已有而优先复用。
-function buildUserMessage(input: { people: number; preference?: string }): string {
+function buildUserMessage(input: {
+  people: number
+  preference?: string
+  style: InspirationStyle
+}): string {
   const parts: string[] = [`今天 ${input.people} 人吃饭`]
   // 份量级提示：人数多时建议菜数水涨船高，避免 AI 只给两三道
   if (input.people >= 4) {
@@ -95,9 +102,13 @@ function buildUserMessage(input: { people: number; preference?: string }): strin
     parts.push(`口味偏好：${input.preference}`)
   }
   parts.push('请注意荤素搭配，合理组合荤菜、素菜、汤和主食')
-  // 创意约束：避免总推荐最常见的大路菜
-  parts.push('菜单要有新意：避免番茄炒蛋、青椒肉丝、麻婆豆腐、土豆丝等最常见的大路菜，同等条件下优先更有特色的搭配')
-  parts.push(pickInspiration())
+  // 风格档位约束（替代早期的反大路菜黑名单——那会把默认输出推向不家常）
+  parts.push(
+    input.style === 'creative'
+      ? '菜单要有新意：避免番茄炒蛋、青椒肉丝、麻婆豆腐、土豆丝等大路菜，优先中式地方风味的特色搭配'
+      : '菜品以经典家常菜为主，做法简单、好吃下饭',
+  )
+  parts.push(pickInspiration(input.style))
   return parts.join('；') + '。'
 }
 
@@ -151,7 +162,7 @@ export async function POST(req: Request): Promise<Response> {
   }
   const system: ChatMessage = {
     role: 'system',
-    content: [systemPromptWithLibrary(recipes), MENU_FORMAT_RULE].join('\n'),
+    content: [systemPromptWithLibrary(recipes, input.style), MENU_FORMAT_RULE].join('\n'),
   }
   const baseUser: ChatMessage = { role: 'user', content: buildUserMessage(input) }
   // 温度分层：一桌菜单是轻量结构，0.8 略偏创意；解析失败仍有一次重试兜底

@@ -10,6 +10,7 @@
 // - extractChatMenuJson：<menu> 标签提取 + 清单 schema 校验
 import type { Recipe } from './recipe-types'
 import { validateRecipe } from './recipe-types'
+import type { InspirationStyle } from './inspiration'
 
 // extractRecipeJson = extractJson + validateRecipe：/api/ai/recipes 与 /api/ai/chat 的统一出口
 // （menu 走自己的 menuSchema、nutrition 走 nutritionSchema，都不经过这里）。
@@ -79,13 +80,19 @@ export function extractChatMenuJson(text: string): ChatMenu | null {
   return null
 }
 
-// 系统提示词：人设 + 库摘要段（仅作防重复参考，不设优先级）+ 创意约束
-export function systemPromptWithLibrary(recipes: Recipe[]): string {
+// 系统提示词：人设 + 库摘要段（仅作防重复参考，不设优先级）+ 风格档位约束。
+// style 决定推荐倾向：home=经典家常优先（默认），creative=中式地方风味与特色技法
+export function systemPromptWithLibrary(recipes: Recipe[], style: InspirationStyle = 'home'): string {
   const lines: string[] = [
     '你是一个中餐家常菜 AI 菜谱助手，专门帮助用户解决「今天吃什么」的问题：可以按现有食材生成菜谱、',
     '根据人数和口味点菜搭配、回答烹饪相关问题。回答要实用、口语化，步骤清晰可操作。',
-    '推荐时尽量给出有新意的搭配，避免总用最常见的大路菜；同一食材可以尝试不同做法。',
   ]
+  // 风格档位句（替代早期的「避免大路菜」全局约束——那会把默认输出推向不家常）
+  lines.push(
+    style === 'creative'
+      ? '推荐时尽量给出有新意的搭配，避免大路菜；可以用中式地方风味与特色技法做出不一样的家常菜。'
+      : '推荐时优先经典家常做法：简单易做、食材好买、好吃下饭，拿不准就选大家最常做的那个。',
+  )
   if (recipes.length === 0) {
     lines.push('菜谱库为空。', '你生成的菜谱后续会被用户存入菜谱库。')
     return lines.join('\n')
@@ -129,7 +136,18 @@ export const RECIPE_FORMAT_RULE = [
 // 与买什么（/api/ai/menu）的区别：这边有食材输入——每道菜标注主角食材，菜数由食材自然搭配决定
 // （可合并成一道菜，不要求菜数等于食材数；每种主要食材都要在推荐里有用途）；
 // 那边无食材——按人数配一桌菜 + 采购清单。清单确认后由前端逐菜调 /api/ai/recipes 生成完整菜谱。
-export const CHAT_MENU_FORMAT_RULE = [
+// 说明：第 9 条（做法倾向）按 style 切换——home 走家常经典，creative 才引导「不常见做法」
+export function buildChatMenuFormatRule(style: InspirationStyle = 'home'): string {
+  return CHAT_MENU_FORMAT_RULE_BASE.map((line) =>
+    line === '__STYLE_LINE__'
+      ? style === 'creative'
+        ? '  为每种食材给出不常见但有依据的做法（例如番茄可做番茄炖牛腩/番茄啫啫煲，而不只是番茄炒蛋）；'
+        : '  优先给家常经典做法（例如番茄炒蛋、番茄蛋汤），步骤简单、成功率高；'
+      : line,
+  ).join('\n')
+}
+
+const CHAT_MENU_FORMAT_RULE_BASE = [
   '回答规则：',
   '- 当用户列出一种或多种食材、想用来做菜时：先用一两句话说明搭配思路，然后输出一个 <menu> 标签，',
   '  标签内为 JSON（不要在 JSON 外再加其他文字），最后以 </menu> 结束。JSON 格式：',
@@ -140,7 +158,7 @@ export const CHAT_MENU_FORMAT_RULE = [
   '  如果这些食材本身就是一道菜的完整搭配，就只推荐这一道，不要为了多给选择而再造一道；',
   '  只有在搭配合理、确实还想再吃一道时才增加菜品。',
   '  可少量使用用户未列出的常见辅料（葱姜蒜、调味料等），但主角应是用户提供的食材。',
-  '  为每种食材给出不常见但有依据的做法（例如番茄可做番茄炖牛腩/番茄啫啫煲，而不只是番茄炒蛋）；',
+  '__STYLE_LINE__',
   '  避免与对话历史中已推荐过的菜重复。',
   '  在 reason 中说明该菜用到了哪些用户提供的食材，便于用户核对没有遗漏。',
   '  当上一轮输出过 <menu> 清单、用户又说「继续」「再来几道」「还有别的吗」时：只推荐此前尚未推荐过的新菜（菜品名不得重复，这是第一约束）；',
@@ -153,7 +171,7 @@ export const CHAT_MENU_FORMAT_RULE = [
   '- 当用户询问烹饪知识、技巧、或与食材推荐无关的闲聊时：正常文字回答，不输出 <menu> 标签。',
   '- 当用户明确要求生成某道菜的完整做法/菜谱时：正常输出 <recipe> 标签（按下方菜谱格式规则）。',
   '- 优先级：用户明确指定菜名或要求做法时，<recipe> 优先于 <menu> 清单与「继续」去重要求。',
-].join('\n')
+]
 
 // 营养估算格式规则（/api/ai/nutrition 专用，温度 0.5 求稳）：
 // 只输出 <nutrition> 标签包裹的 JSON，字段与 recipe-types 的 nutritionSchema 一致（estimated 恒 true）

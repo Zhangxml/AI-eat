@@ -25,7 +25,7 @@ const MAX_SERVINGS = 50
 // 读取 JSON body 并做参数校验；非法返回 null（route 层转 400）
 async function parseInput(
   req: Request,
-): Promise<{ ingredients?: string[]; dish?: string; servings?: number } | null> {
+): Promise<{ ingredients?: string[]; dish?: string; servings?: number; style: 'home' | 'creative' } | null> {
   let body: unknown
   try {
     body = await req.json()
@@ -72,14 +72,17 @@ async function parseInput(
 
   // ingredients 与 dish 至少一个非空，否则 400
   if (ingredients === undefined && dish === undefined) return null
-  return { ingredients, dish, servings }
+  // style：可选档位，'creative' 之外一律回落 home（含未提供/空串）
+  const style: 'home' | 'creative' = b.style === 'creative' ? 'creative' : 'home'
+  return { ingredients, dish, servings, style }
 }
 
-// 组装用户消息：食材/菜名/份量拼装
+// 组装用户消息：食材/菜名/份量拼装（inspiration 由调用方按需追加，这里不拼）
 function buildUserMessage(input: {
   ingredients?: string[]
   dish?: string
   servings?: number
+  style: 'home' | 'creative'
 }): string {
   const parts: string[] = []
   if (input.ingredients) {
@@ -130,10 +133,10 @@ export async function POST(req: Request): Promise<Response> {
   }
   const system: ChatMessage = {
     role: 'system',
-    content: [systemPromptWithLibrary(recipes), RECIPE_FORMAT_RULE].join('\n'),
+    content: [systemPromptWithLibrary(recipes, input.style), RECIPE_FORMAT_RULE].join('\n'),
   }
   // 有食材、未指定菜名时才加灵感种子：帮助跳出固定搭配；用户明确指定菜名时严格按菜名生成，不跑偏。
-  const inspiration = input.ingredients && !input.dish ? `；${pickInspiration()}（合理范围内参考，不必硬套）` : ''
+  const inspiration = input.ingredients && !input.dish ? `；${pickInspiration(input.style)}（合理范围内参考，不必硬套）` : ''
   const baseUser: ChatMessage = { role: 'user', content: `${buildUserMessage(input)}${inspiration}` }
   // 温度分层：完整菜谱字段多，固定 0.7 优先保证结构化 JSON 成功率。
   const aiOptions = { temperature: resolveTemperature('recipe') }

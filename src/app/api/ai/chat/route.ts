@@ -9,9 +9,9 @@
 // 实现说明：未用 TransformStream 而是手动泵上游 reader——闭合后的菜谱提取/重试（aiComplete）是异步工作，
 // 在 pump 循环结束后统一处理，比 transform/flush 同步回调里排异步任务更可控，且便于接入 request.signal 取消
 import { loadAiConfig, aiChatStream, aiComplete, type ChatMessage } from '@/lib/ai-client'
-import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, CHAT_MENU_FORMAT_RULE, extractRecipeJson, extractChatMenuJson } from '@/lib/ai-prompts'
+import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, buildChatMenuFormatRule, extractRecipeJson, extractChatMenuJson } from '@/lib/ai-prompts'
 import { resolveTemperature } from '@/lib/ai-temperatures'
-import { pickInspiration } from '@/lib/inspiration'
+import { pickInspiration, type InspirationStyle } from '@/lib/inspiration'
 import { listRecipes } from '@/lib/recipe-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
@@ -199,6 +199,7 @@ function processUpstreamChunk(
 }
 
 // POST handler：参数校验 → 400；AI 配置 → 503；上游请求失败 → 502；正常 → SSE 流
+// 可选 body.style：'home'（默认，家常优先）| 'creative'（中式创意），决定人设句与灵感池
 export async function POST(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
@@ -213,6 +214,9 @@ export async function POST(req: Request): Promise<Response> {
     await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
     return Response.json({ error: '参数缺失或非法：messages 须为非空的消息数组' }, { status: 400 })
   }
+  // 风格档位（审计：默认曾偏向「避免大路菜」导致不家常——现默认 home，前端可切 creative）
+  const styleRaw = new URL(req.url).searchParams.get('style')
+  const style: InspirationStyle = styleRaw === 'creative' ? 'creative' : 'home'
   // 输入规模上限（审计修复 #4）：条数 ≤50、单条 content ≤8000 字符、总字符 ≤50000——
   // 防御超大对话历史把上游 token 消耗与内存放大（400 中文文案与既有 400 形态一致）
   if (messages.length > CHAT_MAX_MESSAGES) {
@@ -258,15 +262,18 @@ export async function POST(req: Request): Promise<Response> {
     await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 500 })
     return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
   }
-  // 系统消息 = 人设 + 库摘要（仅防重复参考）+ 输出规则（<recipe>/<menu> 两态并存）+ 本次灵感方向；
+  // 系统消息 = 人设（含风格档位）+ 库摘要（仅防重复参考）+ 输出规则 + 本次灵感方向；
   // 其后原样转发客户端 messages
-  const inspiration = `${pickInspiration()}（若用户请求推荐或搭配，可优先尝试该灵感方向，合理范围内即可、不必硬套；若用户明确指定菜名，则严格按指定菜名生成。）`
+  const inspiration = `${pickInspiration(style)}（若用户请求推荐或搭配，可优先尝试该灵感方向，合理范围内即可、不必硬套；若用户明确指定菜名，则严格按指定菜名生成。）`
   const sent: ChatMessage[] = [
     {
       role: 'system',
-      content: [systemPromptWithLibrary(recipes), RECIPE_FORMAT_RULE, CHAT_MENU_FORMAT_RULE, inspiration].join(
-        '\n',
-      ),
+      content: [
+        systemPromptWithLibrary(recipes, style),
+        RECIPE_FORMAT_RULE,
+        buildChatMenuFormatRule(style),
+        inspiration,
+      ].join('\n'),
     },
     ...messages,
   ]

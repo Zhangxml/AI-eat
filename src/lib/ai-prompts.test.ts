@@ -1,7 +1,13 @@
 // AI 提示词与结构化输出解析的单测（Task 9）
 // 覆盖：库摘要注入（设计 5.2）、格式规则文本（内嵌 5.3 番茄炒蛋示例）、三形态输出提取 + 校验失败返回 null
 import { describe, expect, it } from 'vitest'
-import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, extractJson, extractRecipeJson } from './ai-prompts'
+import {
+  systemPromptWithLibrary,
+  RECIPE_FORMAT_RULE,
+  buildChatMenuFormatRule,
+  extractJson,
+  extractRecipeJson,
+} from './ai-prompts'
 import type { Recipe } from './recipe-types'
 
 // 合法 Recipe 夹具：番茄炒蛋，字段与设计文档 5.3 示例一致（含 id/时间戳/source:'ai'/nutrition.estimated:true）
@@ -45,14 +51,24 @@ describe('systemPromptWithLibrary 库摘要注入', () => {
   it('菜谱库仅作防重复参考，不再要求优先推荐已有菜', () => {
     const prompt = systemPromptWithLibrary([recipeFixture])
     expect(prompt).toContain('不必优先推荐库中已有的菜')
-    expect(prompt).toContain('有新意的搭配')
     expect(prompt).not.toContain('推荐时优先推荐菜谱库中已有的菜')
+  })
+  it('默认 home 档：优先经典家常做法（不再含「避免大路菜」）', () => {
+    const prompt = systemPromptWithLibrary([recipeFixture])
+    expect(prompt).toContain('优先经典家常做法')
+    expect(prompt).not.toContain('避免总用最常见的大路菜')
+  })
+  it('creative 档：注入「有新意/避免大路菜」创意约束', () => {
+    const prompt = systemPromptWithLibrary([recipeFixture], 'creative')
+    expect(prompt).toContain('有新意的搭配')
+    expect(prompt).toContain('避免大路菜')
   })
 })
 
 describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
   it('允许食材自然合并成一道菜，不要求菜品数等于食材数', async () => {
-    const { CHAT_MENU_FORMAT_RULE } = await import('./ai-prompts')
+    const { buildChatMenuFormatRule } = await import('./ai-prompts')
+    const CHAT_MENU_FORMAT_RULE = buildChatMenuFormatRule('home')
     // 明确取消「一种食材对应一道菜」的硬绑定
     expect(CHAT_MENU_FORMAT_RULE).not.toContain('dishes 的数量与用户给出的食材数量一致')
     expect(CHAT_MENU_FORMAT_RULE).toContain('可以合并')
@@ -66,7 +82,8 @@ describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
   })
 
   it('规则要求「继续」只出新菜，且食材覆盖为次要偏好', async () => {
-    const { CHAT_MENU_FORMAT_RULE } = await import('./ai-prompts')
+    const { buildChatMenuFormatRule } = await import('./ai-prompts')
+    const CHAT_MENU_FORMAT_RULE = buildChatMenuFormatRule('home')
     expect(CHAT_MENU_FORMAT_RULE).toContain('继续')
     // 第一约束：不重复已推荐
     expect(CHAT_MENU_FORMAT_RULE).toContain('不得重复')
@@ -81,6 +98,24 @@ describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
     // 「继续」需限定在上一轮有清单的语境，避免把闲聊的「继续」误判为要清单
     expect(CHAT_MENU_FORMAT_RULE).toContain('上一轮输出过 <menu> 清单')
     expect(CHAT_MENU_FORMAT_RULE).toContain('继续文字讲解即可')
+  })
+})
+
+describe('buildChatMenuFormatRule 风格档位', () => {
+  it('home 档使用家常经典做法，不含「不常见做法」引导', () => {
+    const rule = buildChatMenuFormatRule('home')
+    expect(rule).toContain('优先给家常经典做法')
+    expect(rule).not.toContain('不常见但有依据的做法')
+  })
+
+  it('creative 档使用「不常见做法」引导', () => {
+    const rule = buildChatMenuFormatRule('creative')
+    expect(rule).toContain('不常见但有依据的做法')
+    expect(rule).not.toContain('优先给家常经典做法')
+  })
+
+  it('默认参数为 home', () => {
+    expect(buildChatMenuFormatRule()).toBe(buildChatMenuFormatRule('home'))
   })
 })
 
