@@ -243,7 +243,7 @@ export default function ChatView() {
             <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">AI-eat</h1>
             <p className="mt-3 text-base text-neutral-600 dark:text-neutral-400">你的 AI 菜谱助手</p>
             <p className="mt-2 text-sm leading-6 text-neutral-500 dark:text-neutral-400">
-              说说冰箱里有什么，AI 会按食材数量推荐几道菜；
+              说说冰箱里有什么，AI 会按现有食材搭配出合适的菜；
               <br />
               点某道菜的「生成菜谱」得到完整做法并存入菜谱库。没有食材？去「买什么」按人数配一桌菜。
             </p>
@@ -275,7 +275,7 @@ export default function ChatView() {
                     saving={savingIds[it.recipe.id] ?? false}
                   />
                 )}
-                {/* menu 事件：食材推荐清单——每菜一行（主角食材+理由），确认后逐菜生成完整菜谱 */}
+                {/* menu 事件：食材推荐清单——每菜一行（主料+理由，理由中说明用到了哪些食材），确认后逐菜生成完整菜谱 */}
                 {it.menu && (
                   <section
                     aria-label="食材推荐清单"
@@ -299,7 +299,7 @@ export default function ChatView() {
                                 {d.name}
                               </span>
                               <span className="shrink-0 rounded-full bg-neutral-200 px-2 py-0.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
-                                主角：{d.ingredient}
+                                主料：{d.ingredient}
                               </span>
                             </div>
                             <p className="min-w-0 break-words text-sm leading-6 text-neutral-600 dark:text-neutral-400">

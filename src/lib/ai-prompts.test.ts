@@ -50,6 +50,22 @@ describe('systemPromptWithLibrary 库摘要注入', () => {
   })
 })
 
+describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
+  it('允许食材自然合并成一道菜，不要求菜品数等于食材数', async () => {
+    const { CHAT_MENU_FORMAT_RULE } = await import('./ai-prompts')
+    // 明确取消「一种食材对应一道菜」的硬绑定
+    expect(CHAT_MENU_FORMAT_RULE).not.toContain('dishes 的数量与用户给出的食材数量一致')
+    expect(CHAT_MENU_FORMAT_RULE).toContain('可以合并')
+    // 每种主要食材必须有用武之地
+    expect(CHAT_MENU_FORMAT_RULE).toContain('每种主要食材都要体现')
+    // 禁止为凑数硬拆
+    expect(CHAT_MENU_FORMAT_RULE).toContain('不要为了凑数量')
+    // 食材本身就是一道菜的完整搭配时，只推荐这一道
+    expect(CHAT_MENU_FORMAT_RULE).toContain('本身就是一道菜的完整搭配')
+    expect(CHAT_MENU_FORMAT_RULE).toContain('只推荐这一道')
+  })
+})
+
 describe('RECIPE_FORMAT_RULE 格式规则', () => {
   it('要求介绍文字后输出 <recipe> 包裹的完整 JSON', () => {
     expect(RECIPE_FORMAT_RULE).toContain('<recipe>')
