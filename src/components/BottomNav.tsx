@@ -15,22 +15,30 @@ export const NAV_ITEMS: { href: string; label: string }[] = [
 // 底部导航默认组件：固定底部，单项触控高度不小于 44px，当前路由项高亮
 export default function BottomNav() {
   const pathname = usePathname()
+  // 审计 #22：子路径也点亮所属 tab（/recipes/[id] → 菜谱库）；'/' 特殊——只精确匹配置信，
+  // 否则全站路径都以 '/' 开头会导致四个 tab 全亮
+  const isActive = (href: string) =>
+    href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`)
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 flex h-14 items-stretch border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-      {NAV_ITEMS.map((item) => (
-        <Link
-          key={item.href}
-          href={item.href}
-          className={`flex min-h-[44px] flex-1 items-center justify-center text-sm transition-colors ${
-            pathname === item.href
-              ? 'font-medium text-black dark:text-white'
-              : 'text-neutral-500 hover:text-black dark:hover:text-white'
-          }`}
-        >
-          {item.label}
-        </Link>
-      ))}
+      {NAV_ITEMS.map((item) => {
+        const active = isActive(item.href)
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-current={active ? 'page' : undefined}
+            className={`flex min-h-[44px] flex-1 items-center justify-center text-sm transition-colors ${
+              active
+                ? 'font-medium text-black dark:text-white'
+                : 'text-neutral-500 hover:text-black dark:hover:text-white'
+            }`}
+          >
+            {item.label}
+          </Link>
+        )
+      })}
     </nav>
   )
 }

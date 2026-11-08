@@ -285,7 +285,7 @@ export default function ChatView() {
                       推荐清单（{it.menu.dishes.length} 道），想做哪道点「生成菜谱」
                     </h3>
                     <ul className="flex flex-col gap-3">
-                      {it.menu.dishes.map((d, di) => {
+                      {it.menu.dishes.map((d) => {
                         const key = `${i}:${d.name}`
                         const st = dishStates[key]
                         return (

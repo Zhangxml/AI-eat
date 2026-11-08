@@ -25,9 +25,6 @@ const CHAT_MAX_MESSAGES = 50
 const CHAT_MAX_CONTENT_CHARS = 8000
 const CHAT_MAX_TOTAL_CHARS = 50000
 
-const OPEN_TAG = '<recipe>'
-const CLOSE_TAG = '</recipe>'
-
 // 校验 body：messages 须为非空数组，每项为合法 ChatMessage（role 枚举 + 字符串 content）；非法返回 null（route 层转 400）
 async function parseInput(req: Request): Promise<ChatMessage[] | null> {
   let body: unknown
@@ -75,8 +72,6 @@ class RecipeStreamSplitter {
   private structSeen = false
   private buf = ''
   private tagBuf = ''
-  // 流在标签态中途结束时（flush 时）的残留缓冲快照，供 lastUnclosedRecipe 查询
-  private unclosed: string | null = null
 
   constructor(
     private readonly onRecipeComplete: (content: string) => void,
@@ -130,13 +125,6 @@ class RecipeStreamSplitter {
     }
   }
 
-  // flush 后查询：流在标签态中途结束时是否有未闭合缓冲（需走提取路径）；正常闭合流返回 null。
-  // 附带闭合的标签类型，调用方据此选解析函数（<recipe> 未闭合走菜谱提取；<menu> 未闭合走清单提取）
-  lastUnclosedTag(): { kind: 'recipe' | 'menu'; content: string } | null {
-    if (this.unclosed === null) return null
-    return { kind: this.unclosedKind, content: this.unclosed }
-  }
-
   // 上游结束时调用：冲刷扣留的半截标签文本（此时不可能再拼成完整标签）；
   // 若流在标签态中途结束（模型漏写闭合标签或上游截断），把残留缓冲当作闭合内容返回快照，
   // 交由调用方走同一条「提取 → 重试 → 事件」路径（裸 JSON 平衡扫描可解出未闭合但完整的 JSON）
@@ -145,8 +133,6 @@ class RecipeStreamSplitter {
     if (this.inTag !== null) {
       this.tagBuf += this.buf
       if (this.tagBuf !== '') {
-        this.unclosed = this.tagBuf
-        this.unclosedKind = this.inTag
         unclosed = { kind: this.inTag, content: this.tagBuf }
       }
     } else if (!this.structSeen && this.buf) {
@@ -156,9 +142,6 @@ class RecipeStreamSplitter {
     this.tagBuf = ''
     return unclosed
   }
-
-  // 未闭合缓冲的类型快照（lastUnclosedTag 用）
-  private unclosedKind: 'recipe' | 'menu' = 'recipe'
 }
 
 // 硬条件（同 Task 10）：AI 可能照抄提示词示例的 id/时间戳（r-1730000000-ab12cd 能过 strict schema 校验），
@@ -404,6 +387,8 @@ export async function POST(req: Request): Promise<Response> {
           )
           emit(sseEvent('done', {}))
         }
+        // 访问日志（审计 #26）：上游中断也记一条 502——否则「流开始后失败」的调用完全逃过审计
+        await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 502 })
         try {
           controller.close()
         } catch {

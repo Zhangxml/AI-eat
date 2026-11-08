@@ -287,9 +287,9 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
       {/* 标签：可选，空数组不渲染 */}
       {recipe.tags.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
-          {recipe.tags.map((t) => (
+          {recipe.tags.map((t, ti) => (
             <span
-              key={t}
+              key={`${t}-${ti}`}
               className="rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-xs text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
             >
               {t}

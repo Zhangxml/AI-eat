@@ -17,7 +17,7 @@ interface AccessLogEntry {
   status: number
 }
 
-// 每页条数：50 条/页，1000 条上限即最多 20 页
+// 每页条数：50 条/页，200 条上限即最多 4 页
 const PAGE_SIZE = 50
 
 // 状态码配色：2xx 绿（正常）、3xx/4xx 中 401/403 红（鉴权失败=有人在乱试）、其余灰
@@ -39,8 +39,8 @@ export default function AccessLogsPage() {
   const [logs, setLogs] = useState<AccessLogEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  // 前端分页：数据一次拉全量（上限 1000 条，局域网传输无感），按 PAGE_SIZE 切片渲染，
-  // 避免一次渲染 1000 个 DOM 节点（手机渲染慢、列表长难翻找）
+  // 前端分页：数据一次拉全量（上限 200 条，传输极小），按 PAGE_SIZE 切片渲染，
+  // 避免一次渲染过多 DOM 节点（手机渲染慢、列表长难翻找）
   const [page, setPage] = useState(1)
 
   const load = useCallback(async () => {
@@ -69,6 +69,12 @@ export default function AccessLogsPage() {
   const totalPages = Math.max(1, Math.ceil(logs.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages) // 刷新后日志变少时页码收敛
   const pageLogs = logs.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+  // 审计 #23：翻页后回到列表顶部（否则翻到下一页仍停在上一页的滚动位置，看不到新内容开头）
+  const gotoPage = (next: number) => {
+    setPage(next)
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   // 刷新时页码重置到第一页（新数据从最新看起）
   const refresh = () => {
@@ -149,7 +155,7 @@ export default function AccessLogsPage() {
             <nav aria-label="分页" className="mt-4 flex items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                onClick={() => gotoPage(Math.max(1, safePage - 1))}
                 disabled={safePage <= 1}
                 aria-label="上一页"
                 className="min-h-[44px] rounded-lg border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:text-neutral-300 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800 dark:disabled:border-neutral-800 dark:disabled:text-neutral-600"
@@ -161,7 +167,7 @@ export default function AccessLogsPage() {
               </span>
               <button
                 type="button"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                onClick={() => gotoPage(Math.min(totalPages, safePage + 1))}
                 disabled={safePage >= totalPages}
                 aria-label="下一页"
                 className="min-h-[44px] rounded-lg border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:text-neutral-300 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800 dark:disabled:border-neutral-800 dark:disabled:text-neutral-600"

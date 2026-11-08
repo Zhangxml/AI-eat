@@ -28,6 +28,9 @@ interface ImportResult {
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<ConfigResponse | null>(null)
+  // 审计 #24：配置加载失败态与「加载中」区分——初次渲染 config 为 null 时显示加载中，
+  // 仅请求真正失败后才显示「加载失败」并给重试入口（原实现初载必现失败文案闪烁）
+  const [configFailed, setConfigFailed] = useState(false)
   // 导入流程状态：selectedFile 选中待导入的文件；importing 导入请求进行中；result 导入结果
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [importing, setImporting] = useState(false)
@@ -38,15 +41,20 @@ export default function SettingsPage() {
   // 竞态防护：组件卸载后不再 setState
   const mountedRef = useRef(true)
 
-  // 拉取配置状态：只读展示，失败静默（页面主体不依赖它）
+  // 拉取配置状态：只读展示；失败置 configFailed 供页面显示「加载失败 + 重试」
   const loadConfig = useCallback(async () => {
+    setConfigFailed(false)
     try {
       const res = await apiFetch('/api/config')
-      if (!res.ok || !mountedRef.current) return
+      if (!res.ok || !mountedRef.current) {
+        if (mountedRef.current) setConfigFailed(true)
+        return
+      }
       const data = (await res.json()) as ConfigResponse
       if (mountedRef.current) setConfig(data)
     } catch {
-      // 网络异常时保持 null，页面展示「加载失败」兜底文案
+      // 网络异常：标记失败态（页面据此显示「加载失败」与重试按钮）
+      if (mountedRef.current) setConfigFailed(true)
     }
   }, [])
 
@@ -89,12 +97,14 @@ export default function SettingsPage() {
     }
   }
 
-  // 文件选择：只记录文件并清空上次结果/错误，真正导入由「开始导入」按钮触发
+  // 文件选择：只记录文件并清空上次结果/错误，真正导入由「开始导入」按钮触发。
+  // 审计 #19：选中后清空 input.value——否则同一文件二次选择不触发 onChange（失败后重试导入的常见场景）
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] ?? null
     setSelectedFile(file)
     setResult(null)
     setError('')
+    e.target.value = ''
   }
 
   // 导入：读文件文本 → JSON.parse → POST /api/backup → 200 展示 imported/skipped/invalid 结果
@@ -207,7 +217,22 @@ export default function SettingsPage() {
       <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
         <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">AI 供应商</h2>
         {config === null ? (
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">状态加载失败</p>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            {configFailed ? (
+              <>
+                状态加载失败{' '}
+                <button
+                  type="button"
+                  onClick={() => void loadConfig()}
+                  className="underline underline-offset-2"
+                >
+                  重试
+                </button>
+              </>
+            ) : (
+              '加载中…'
+            )}
+          </p>
         ) : !config.aiConfigured ? (
           <p className="text-sm text-neutral-600 dark:text-neutral-400">
             未配置。请在服务器环境变量设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 后重启。
@@ -230,7 +255,9 @@ export default function SettingsPage() {
         <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">访问鉴权</h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
           {config === null
-            ? '状态加载失败'
+            ? configFailed
+              ? '状态加载失败'
+              : '加载中…'
             : config.authEnabled
               ? '已启用（需口令登录后访问）'
               : '未启用（局域网信任边界，无需登录）'}
@@ -243,7 +270,9 @@ export default function SettingsPage() {
         <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">删除保护</h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
           {config === null
-            ? '状态加载失败'
+            ? configFailed
+              ? '状态加载失败'
+              : '加载中…'
             : config.deleteEnabled
               ? '已启用（删除菜谱需输入删除密码，服务端校验）'
               : '未启用（删除仅浏览器确认，无密码校验）。启用：设置 DELETE_ENABLED=true 与 DELETE_PASSWORD 后重启'}

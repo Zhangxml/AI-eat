@@ -166,11 +166,16 @@ export default function DishesPage() {
         const data = (await res.json()) as { recipe: Recipe }
         setDishStates((prev) => ({ ...prev, [name]: { phase: 'ready', recipe: data.recipe } }))
         // 生成完成后把展开的菜谱卡片滚入视口：RecipeCard 在菜卡列表内，手机上常落在视口外，
-        // 只见按钮变「已生成」而看不到内容；smooth 滚动避免生硬跳转
+        // 只见按钮变「已生成」而看不到内容；smooth 滚动避免生硬跳转。
+        // 审计 #21：rAF 回调异步执行已脱离外层 try，选择器异常会变成未捕获错误——本处自行兜住
         requestAnimationFrame(() => {
-          document
-            .querySelector(`li[aria-label="推荐菜：${CSS.escape(name)}"] section[aria-label^="菜谱："]`)
-            ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          try {
+            document
+              .querySelector(`li[aria-label="推荐菜：${CSS.escape(name)}"] section[aria-label^="菜谱："]`)
+              ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          } catch {
+            // 滚动定位失败不影响主流程（卡片已渲染，用户滚动可见）
+          }
         })
         return
       }

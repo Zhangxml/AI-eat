@@ -12,7 +12,7 @@ services:
     env_file:
       - .env
     environment:
-      # 五个变量显式透传：${VAR:-默认} 由 compose 解析（自动读同目录 .env），shell 环境变量可覆盖
+      # 六个变量显式透传：${VAR:-默认} 由 compose 解析（自动读同目录 .env），shell 环境变量可覆盖
       # 值为空字符串等价未配置（代码侧 Boolean('') 为 false），不影响 AI 未配置的降级行为
       - AI_BASE_URL=${AI_BASE_URL:-}
       - AI_API_KEY=${AI_API_KEY:-}

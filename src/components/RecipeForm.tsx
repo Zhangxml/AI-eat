@@ -338,7 +338,8 @@ export default function RecipeForm({
     setSteps((prev) => [...prev, ''])
   }
   function removeStep(idx: number) {
-    setSteps((prev) => prev.filter((_, i) => i !== idx))
+    // 审计 #20：与食材行一致，至少保留一行（全部删光后表单无法继续编辑）
+    setSteps((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx)))
   }
   function updateStep(idx: number, value: string) {
     setSteps((prev) => prev.map((s, i) => (i === idx ? value : s)))
@@ -520,8 +521,9 @@ export default function RecipeForm({
               <button
                 type="button"
                 onClick={() => removeStep(idx)}
+                disabled={steps.length <= 1}
                 aria-label={`删除步骤 ${idx + 1}`}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-neutral-300 text-lg text-neutral-500 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-neutral-300 text-lg text-neutral-500 transition-colors active:bg-neutral-100 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
               >
                 ✕
               </button>
