@@ -58,6 +58,28 @@
 
 输出协议：`<menu>{JSON}</menu>`（复用 ai-prompts 的平衡扫描解析）+ zod schema（dishes 的 category 五枚举、name/reason 非空；shopping 为 `{group, items[]}[]`，并兼容旧的扁平字符串数组）。失败重试一次同 AI 模块公共协议。
 
+### 并发：点菜 vs 逐菜生成
+
+两段式天然允许「菜单 A 的某道菜在生成中，用户又去点新菜」。改造前实测（无头浏览器把第二次点菜延迟 25 秒）：
+
+| 时刻 | 生成按钮 | 已生成菜谱 |
+| --- | --- | --- |
+| 点菜中（旧菜单仍在） | 仍可点 | — |
+| 菜谱生成完成 | 「已生成」 | 1 |
+| 新菜单落地 | 新菜单的按钮 | **0（静默丢失）** |
+
+三个根因与对应处理：
+
+| 根因 | 处理 |
+| --- | --- |
+| 「点菜中」旧菜单仍可点「生成菜谱」 | 生成按钮 `disabled` 增加 `menuLoading`，`handleGenerate` 内也兜底 return |
+| 新菜单落地时 `setDishStates({})` 静默清空 | 清空前统计「已生成未入库」道数，`window.confirm` 二次确认（已入库的不算，它们在菜谱库里）；用户取消则整次点菜不发生 |
+| 单槽 `abortRef` 只能取消最后一个请求 | 拆成 `menuAbortRef`（点菜）+ `dishAbortsRef: DishAborts`（按菜名登记，可全部取消）；重新点菜时取消全部在途生成并把对应菜复位为 `idle`（可重试，不留永久「生成中…」） |
+
+**能力边界（务必知晓）**：客户端 `abort` **不会中断服务端的上游 AI 调用**——`ai-client` 只有 120 秒超时，`/api/ai/menu`、`/api/ai/recipes`、`/api/ai/nutrition` 均未透传 `req.signal`（仅 `/api/ai/chat` 在流式转发途中取消 upstream reader）。因此这里的取消止损的是「用户等待与界面污染」，**不节省上游 token**。要真正止损需在 `AiCallOptions` 加 `signal` 并用 `AbortSignal.any([req.signal, timeout])` 合并，属独立改动。
+
+纯逻辑抽在 `src/lib/dishes-regen.ts`（`DishAborts` + `countUnsavedRecipes` + `buildRegenConfirmMessage`），有单测覆盖。
+
 ### per-dish 状态机
 
 `Record<dishName, { phase: 'idle'|'generating'|'ready', recipe?, error? }>`：

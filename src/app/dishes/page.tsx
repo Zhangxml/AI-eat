@@ -17,6 +17,7 @@ import RecipeCard from '@/components/RecipeCard'
 import { MenuEpoch } from '@/lib/menu-epoch'
 // 上限与校验口径与服务端共用同一份定义（src/lib/menu-form.ts），避免两侧漂移
 import { MAX_DAYS, MAX_PEOPLE, MAX_TEXT_CHARS, validateMenuForm } from '@/lib/menu-form'
+import { DishAborts, buildRegenConfirmMessage, countUnsavedRecipes } from '@/lib/dishes-regen'
 import type { Recipe } from '@/lib/recipe-types'
 
 // /api/ai/menu 契约：200 { dishes: {name,category,reason}[], shopping: {group,items[]}[] }（category 限五枚举，name/reason 必填）
@@ -98,14 +99,23 @@ export default function DishesPage() {
   // savedNames 已入库（按钮变「已入库」并禁用）；savingNames 请求往返期间禁用（防 201 前双击双入库）
   const [savedNames, setSavedNames] = useState<Record<string, boolean>>({})
   const [savingNames, setSavingNames] = useState<Record<string, boolean>>({})
-  // 请求取消（审计修复）：点菜/逐菜生成的进行中请求挂到 AbortController，组件卸载时 abort，
-  // 卸载后不再 setState；ref 保活，回调读到最新实例
-  const abortRef = useRef<AbortController | null>(null)
+  // 请求取消：点菜与逐菜生成各用一个槽——单槽会被后发起的请求覆盖，导致卸载时漏 abort
+  // （更早的在途请求会继续跑完、继续烧 token）。
+  // - menuAbortRef：点菜请求（同一时刻最多一个）
+  // - dishAbortsRef：逐菜生成请求（可多道并行），按菜名登记，支持「重新点菜时全部取消」
+  const menuAbortRef = useRef<AbortController | null>(null)
+  const dishAbortsRef = useRef(new DishAborts())
   // 菜单代次（审查修复）：重新点菜后，上一份菜单里发起的「生成菜谱」请求若晚到，
   // 会按菜名写回并显示上一个菜单的菜谱。用代次判断丢弃这类过期结果。
   const menuEpochRef = useRef(new MenuEpoch())
   useEffect(() => {
-    return () => abortRef.current?.abort()
+    // DishAborts 实例在组件生命周期内恒定（不会被重新赋值），捕获后供 cleanup 使用
+    const dishAborts = dishAbortsRef.current
+    return () => {
+      // 卸载：两类在途请求全部取消，避免卸载后 setState 与无谓的上游调用
+      menuAbortRef.current?.abort()
+      dishAborts.abortAll()
+    }
   }, [])
 
   // 第一段：开始点菜 → POST /api/ai/menu（200 { dishes, shopping } | 400/502/503 { error: 中文 }）
@@ -118,12 +128,35 @@ export default function DishesPage() {
       return
     }
     const { people, days, preference: pref } = checked
+
+    // 已有「生成完成但未入库」的菜谱：新菜单落地会清空它们，先让用户有机会停手
+    // （AI 调用有成本，静默丢弃用户等了十几秒的成果不可接受）
+    const unsaved = countUnsavedRecipes(dishStates, savedNames)
+    const confirmMsg = buildRegenConfirmMessage(unsaved)
+    if (confirmMsg !== null && !window.confirm(confirmMsg)) return
+
+    // 取消所有在途的逐菜生成：客户端不再等待，晚到的结果也不会写回。
+    // 注意：服务端未把 req.signal 透传给上游（ai-client 只有 120s 超时），所以上游 AI 调用
+    // 仍会跑完——本次取消只止损「用户等待与界面污染」，不节省上游 token。
+    // 被取消的菜复位为 idle（可重试），避免停在「生成中…」永远转圈。
+    const cancelled = dishAbortsRef.current.abortAll()
+    if (cancelled.length > 0) {
+      setDishStates((prev) => {
+        const next = { ...prev }
+        for (const name of cancelled) {
+          // 只复位仍处于 generating 的（期间已完成的保留，返回时代次守卫会丢弃其写回）
+          if (next[name]?.phase === 'generating') delete next[name]
+        }
+        return next
+      })
+    }
+
     setFormError('')
     setMenuError('')
     setMenuLoading(true)
     try {
       const controller = new AbortController()
-      abortRef.current = controller
+      menuAbortRef.current = controller
       // preference 选填：trim 后为空则不携带该字段（与服务端「空串视为未提供」口径一致）
       // 推荐风格由服务端全局设置决定（设置页可改），前端不传参
       const res = await apiFetch('/api/ai/menu', {
@@ -157,7 +190,7 @@ export default function DishesPage() {
       setSavingNames({})
     } catch {
       // 卸载触发的 abort 不再 setState（避免卸载后更新）
-      if (abortRef.current?.signal.aborted) return
+      if (menuAbortRef.current?.signal.aborted) return
       setMenuError('网络异常，请稍后重试')
     } finally {
       setMenuLoading(false)
@@ -167,15 +200,19 @@ export default function DishesPage() {
   // 第二段：单菜生成完整菜谱（per-dish 独立请求与状态，互不阻塞）
   async function handleGenerate(name: string) {
     if (!menu) return
+    // 点菜进行中：旧菜单即将被替换，此时生成的菜谱注定被丢弃——不发请求（按钮也已禁用，此处兜底）
+    if (menuLoading) return
     const st = dishStates[name]
     // 幂等兜底：该菜已在生成中或已就绪直接返回（按钮禁用为主，此判断防极端连点/同名菜重复调用）
     if (st && (st.phase === 'generating' || st.phase === 'ready')) return
     // 记录发起时的菜单代次：返回时若用户已重新点菜（代次变化），结果作废不写回
     const requestEpoch = menuEpochRef.current.value
     setDishStates((prev) => ({ ...prev, [name]: { phase: 'generating' } }))
+    // 控制器建在 try 外：catch 需要读 signal 区分「主动中止」与「网络异常」
+    const controller = new AbortController()
+    // 按菜名登记在途请求：重新点菜时可一次性全部取消（不再只取消最后一个）
+    dishAbortsRef.current.set(name, controller)
     try {
-      const controller = new AbortController()
-      abortRef.current = controller
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -214,11 +251,14 @@ export default function DishesPage() {
       }
       setDishStates((prev) => ({ ...prev, [name]: { phase: 'idle', error: msg } }))
     } catch {
-      // 卸载触发的 abort 不再 setState；其余网络异常回 idle 允许重试
-      if (abortRef.current?.signal.aborted) return
+      // 卸载或「重新点菜」触发的 abort 不再 setState；其余网络异常回 idle 允许重试
+      if (controller.signal.aborted) return
       // 菜单已被替换：过期请求的失败也无需提示（对应菜卡已随旧菜单一起消失）
       if (menuEpochRef.current.isStale(requestEpoch)) return
       setDishStates((prev) => ({ ...prev, [name]: { phase: 'idle', error: '网络异常，请稍后重试' } }))
+    } finally {
+      // 请求结束（含中止）必注销登记，避免注册表无限增长
+      dishAbortsRef.current.delete(name)
     }
   }
 
@@ -382,11 +422,12 @@ export default function DishesPage() {
                   <p className="min-w-0 break-words text-sm leading-6 text-neutral-600 dark:text-neutral-400">{d.reason}</p>
                   {/* 该菜生成失败的局部红字：仅本卡展示，不阻塞其他菜 */}
                   {st.error && <p className="text-sm text-red-500 dark:text-red-400">{st.error}</p>}
-                  {/* 生成菜谱按钮：generating/ready 均禁用（同名菜防重复触发） */}
+                  {/* 生成菜谱按钮：generating/ready 均禁用（同名菜防重复触发）；
+                      点菜进行中同样禁用——旧菜单即将被替换，此时生成的菜谱注定被丢弃 */}
                   <button
                     type="button"
                     onClick={() => void handleGenerate(d.name)}
-                    disabled={st.phase === 'generating' || st.phase === 'ready'}
+                    disabled={menuLoading || st.phase === 'generating' || st.phase === 'ready'}
                     aria-label={`生成菜谱：${d.name}`}
                     className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-white text-base font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-800 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-500"
                   >
