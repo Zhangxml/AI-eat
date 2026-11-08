@@ -26,6 +26,24 @@ describe('菜谱校验', () => {
     expect(validateNutrition({ caloriesKcal: 180, proteinG: 8, fatG: 10, carbG: 12, estimated: false })).toBeNull()
     expect(validateNutrition({ caloriesKCal: 180 })).toBeNull()
   })
+  it('营养四项拒绝负数（AI 估算值不可能为负，防止负值污染表单/入库）', () => {
+    const base = { caloriesKcal: 180, proteinG: 8, fatG: 10, carbG: 12, estimated: true as const }
+    for (const key of ['caloriesKcal', 'proteinG', 'fatG', 'carbG'] as const) {
+      expect(validateNutrition({ ...base, [key]: -1 }), `${key} 为负应拒绝`).toBeNull()
+    }
+    // 0 合法（如水煮菜脂肪可能估为 0）
+    expect(validateNutrition({ ...base, fatG: 0 })).not.toBeNull()
+    // 完整菜谱内嵌营养同样拒绝负数
+    expect(
+      validateRecipe({
+        ...goodDraft,
+        id: 'r-1',
+        createdAt: 'x',
+        updatedAt: 'x',
+        nutrition: { ...base, proteinG: -5 },
+      }),
+    ).toBeNull()
+  })
   it('完整 Recipe 通过', () =>
     expect(validateRecipe({ ...goodDraft, id: 'r-1', createdAt: 'x', updatedAt: 'x' })).not.toBeNull())
   it('id 格式正确', () => expect(makeRecipeId()).toMatch(/^r-\d+-[0-9a-f]{6}$/))

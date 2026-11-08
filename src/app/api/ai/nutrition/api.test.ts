@@ -97,8 +97,17 @@ describe('POST /api/ai/nutrition', () => {
     expect(((await res.json()) as { error: string }).error).toContain('营养数据')
   })
 
-  it('AI_TEMP_NUTRITION 覆盖默认温度，越界值 clamp', async () => {
-    process.env.AI_TEMP_NUTRITION = '1.5'
+  it('AI 输出负营养值 → 视为解析失败重试，两次都负则 502（不回填负值）', async () => {
+    const negative = '<nutrition>{"caloriesKcal":-10,"proteinG":8,"fatG":10,"carbG":12,"estimated":true}</nutrition>'
+    aiCompleteMock.mockResolvedValue(negative)
+    const res = await POST(jsonReq({ dish: '番茄炒蛋' }))
+    expect(res.status).toBe(502)
+    expect(aiCompleteMock).toHaveBeenCalledTimes(2)
+    // 负值输出不应被当作成功返回
+    expect(((await res.json()) as { error: string }).error).toContain('营养数据')
+  })
+
+  it('AI_TEMP_NUTRITION 覆盖默认温度，越界值 clamp', async () => {    process.env.AI_TEMP_NUTRITION = '1.5'
     aiCompleteMock.mockResolvedValueOnce(good)
     await POST(jsonReq({ dish: '番茄炒蛋' }))
     expect(aiCompleteMock.mock.calls[0][2]).toEqual({ temperature: 1 })
