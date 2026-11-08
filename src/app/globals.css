@@ -22,6 +22,14 @@
   }
 }
 
+/* 恒预留竖向滚动条槽位（审计修复）：在经典滚动条环境（Windows/Linux 桌面 Chrome/Edge）下，
+   长页面（如菜谱库）会占用约 15px 滚动条宽度、短页面不占用，导致视口可用宽度来回变化——
+   底部固定导航（fixed inset-x-0）与页面内容随之左右抖动，四个 tab 会整体位移。
+   预留槽位后视口宽度恒定，长短页面切换不再抖动；移动端为 overlay 滚动条，本规则无影响。 */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
