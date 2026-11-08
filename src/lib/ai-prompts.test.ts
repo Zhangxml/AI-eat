@@ -78,6 +78,9 @@ describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
     expect(CHAT_MENU_FORMAT_RULE).toContain('首轮')
     // 明确要求做法时菜谱优先于清单（避免「开始做X」只回一句好的）
     expect(CHAT_MENU_FORMAT_RULE).toContain('优先输出 <recipe>')
+    // 「继续」需限定在上一轮有清单的语境，避免把闲聊的「继续」误判为要清单
+    expect(CHAT_MENU_FORMAT_RULE).toContain('上一轮输出过 <menu> 清单')
+    expect(CHAT_MENU_FORMAT_RULE).toContain('继续文字讲解即可')
   })
 })
 

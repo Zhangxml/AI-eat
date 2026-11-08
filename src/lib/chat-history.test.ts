@@ -124,12 +124,13 @@ describe('buildHistory 菜单摘要（支持「继续」去重）', () => {
     expect(content).not.toContain('A'.repeat(30))
   })
 
-  it('菜名总数与总长有上限，避免 prompt 无限膨胀', () => {
+  it('菜名总量受数量与字符预算限制，且保留最新（长会话去重依赖最近的菜）', () => {
     const names = Array.from({ length: 100 }, (_, i) => `菜名${i}`)
     const items = [{ role: 'assistant' as const, text: 'a1', menuDishNames: names }]
     const content = buildHistory(items, '继续')[0].content
-    expect(content.length).toBeLessThan(800)
-    expect(content).not.toContain('菜名99')
+    expect(content.length).toBeLessThan(1300)
+    expect(content).toContain('菜名99') // 最新保留
+    expect(content).not.toContain('、菜名0、') // 最早被裁
   })
 
   it('不修改入参（纯函数，界面气泡文字保持不变）', () => {
@@ -141,16 +142,17 @@ describe('buildHistory 菜单摘要（支持「继续」去重）', () => {
     expect(items).toEqual(snapshot)
   })
 
-  it('超过 5 轮只保留最近 5 轮消息（控制请求体积，避免撞服务端 50 条上限）', () => {
+  it('超过 5 轮只保留最近 5 轮消息 + 首条用户锚点（控制体积，避免撞服务端 50 条上限）', () => {
     const items: { role: 'user' | 'assistant'; text: string; menuDishNames?: string[] }[] = []
     for (let i = 1; i <= 8; i++) {
       items.push({ role: 'user', text: `u${i}` })
       items.push({ role: 'assistant', text: `a${i}`, menuDishNames: [`第${i}轮菜`] })
     }
     const history = buildHistory(items, '继续')
-    // 5 轮 = 10 条历史 + 当前消息 1 条
-    expect(history).toHaveLength(11)
-    expect(history[0]).toEqual({ role: 'user', content: 'u4' })
+    // 最近 5 轮 = 10 条 + 首条用户锚点 1 条 + 当前消息 1 条
+    expect(history).toHaveLength(12)
+    expect(history[0].content).toBe('u1') // 锚点：初始食材/忌口
+    expect(history[1].content).toBe('u4') // 窗口起点
     expect(history[history.length - 1].content).toBe('继续')
   })
 
@@ -162,8 +164,8 @@ describe('buildHistory 菜单摘要（支持「继续」去重）', () => {
     }
     const history = buildHistory(items, '继续')
     const all = history.map((h) => h.content).join('\n')
-    // 前 3 轮消息已被裁掉，但菜名必须还在摘要里
-    expect(all).not.toContain('u1\n')
+    // u2/u3 的对话已被裁掉（u1 作为锚点保留）
+    expect(all).not.toContain('\nu2\n')
     expect(all).toContain('第1轮菜')
     expect(all).toContain('第8轮菜')
   })
@@ -184,6 +186,70 @@ describe('buildHistory 菜单摘要（支持「继续」去重）', () => {
       items.push({ role: 'user', text: `u${i}` })
       items.push({ role: 'assistant', text: `a${i}` })
     }
-    expect(buildHistory(items, '继续').length).toBeLessThanOrEqual(11)
+    expect(buildHistory(items, '继续').length).toBeLessThanOrEqual(12)
+  })
+})
+
+// 深度审查（第二批）发现的边界：以下用例锁定修复前的真实缺陷
+describe('buildHistory 边界加固', () => {
+  it('窗口内没有任何 assistant（连续失败）时，摘要仍注入（合成一条 assistant 承载）', () => {
+    const items: { role: 'user' | 'assistant'; text: string; menuDishNames?: string[] }[] = [
+      { role: 'assistant', text: 'a-old', menuDishNames: ['早期菜A'] },
+    ]
+    // 连续 5 轮失败：user 有文本，assistant 空文本且无结构化输出
+    for (let i = 1; i <= 6; i++) {
+      items.push({ role: 'user', text: `u${i}` })
+      items.push({ role: 'assistant', text: '' })
+    }
+    const history = buildHistory(items, '继续')
+    const all = history.map((h) => h.content).join('\n')
+    expect(all).toContain('早期菜A')
+  })
+
+  it('菜名超过上限时保留最新而非最早（近因偏差：最该防重复的是最近推荐的菜）', () => {
+    const names = Array.from({ length: 80 }, (_, i) => `菜${i}`)
+    const items = [{ role: 'assistant' as const, text: 'a', menuDishNames: names }]
+    const content = buildHistory(items, '继续')[0].content
+    expect(content).toContain('菜79') // 最新必须保留
+    expect(content).not.toContain('、菜0、') // 最早可丢弃
+  })
+
+  it('裁剪窗口时保留首条用户消息作为锚点（初始食材/忌口/人数不丢失）', () => {
+    const items: { role: 'user' | 'assistant'; text: string }[] = [
+      { role: 'user', text: '2人吃，不要辣，冰箱有番茄鸡蛋' },
+      { role: 'assistant', text: 'a1' },
+    ]
+    for (let i = 2; i <= 8; i++) {
+      items.push({ role: 'user', text: `继续${i}` })
+      items.push({ role: 'assistant', text: `a${i}` })
+    }
+    const history = buildHistory(items, '继续')
+    expect(history[0].content).toBe('2人吃，不要辣，冰箱有番茄鸡蛋')
+  })
+
+  it('不同菜名仅前缀相同（截断后碰撞）不应被判为重复', () => {
+    const long = 'A'.repeat(24)
+    const items = [
+      { role: 'assistant' as const, text: 'a', menuDishNames: [`${long}甲`, `${long}乙`] },
+    ]
+    const content = buildHistory(items, '继续')[0].content
+    // 两个不同菜名都必须被计入（展示时会被截成同样的 24 字符，但去重不能漏记）
+    expect(content.split(long).length - 1).toBe(2)
+  })
+
+  it('摘要总长度有字符预算，不会把单条消息推过服务端 8000 上限', () => {
+    const names = Array.from({ length: 60 }, (_, i) => `菜品名称编号${String(i).padStart(3, '0')}号`)
+    const items = [{ role: 'assistant' as const, text: 'a', menuDishNames: names }]
+    const content = buildHistory(items, '继续')[0].content
+    expect(content.length).toBeLessThan(1300)
+  })
+
+  it('recipeName 为纯空白时不保留空 assistant 消息', () => {
+    const items = [
+      { role: 'user' as const, text: 'u1' },
+      { role: 'assistant' as const, text: '', recipeName: '   ' },
+    ]
+    const history = buildHistory(items, '继续')
+    expect(history.filter((h) => h.role === 'assistant')).toHaveLength(0)
   })
 })
