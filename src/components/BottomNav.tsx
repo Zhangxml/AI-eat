@@ -30,8 +30,10 @@ export default function BottomNav() {
             href={item.href}
             aria-current={active ? 'page' : undefined}
             className={`flex min-h-[44px] flex-1 items-center justify-center text-sm transition-colors ${
+              // 选中态：颜色加深 + 字重 500→600 双重强调（仅加粗不改变 flex-1 等分槽位，
+              // 文字居中展开，不会造成导航项位移）
               active
-                ? 'font-medium text-black dark:text-white'
+                ? 'font-semibold text-black dark:text-white'
                 : 'text-neutral-500 hover:text-black dark:hover:text-white'
             }`}
           >
