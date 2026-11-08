@@ -44,13 +44,19 @@
 
 结构：`shopping: { group: string; items: string[] }[]`，`group` 取 `肉禽蛋/蔬菜/豆制品/主食/调料/其他`（与服务端 `SHOPPING_GROUPS` 同义，前端只做分组标题渲染）。
 
-**解析容错**：schema 用 `z.union` 同时接受旧的扁平字符串数组，自动归一化为单组「采购清单」。旧格式本身是合法输出，不该因结构差异浪费一次 AI 调用。
+**解析容错**：
+
+- `z.union` 同时接受旧的扁平字符串数组，自动归一化为单组「采购清单」——旧格式本身是合法输出，不该因结构差异浪费一次 AI 调用
+- **同名分组自动合并**（保留首次出现顺序、items 拼接）：前端以 `group` 作 React key，同名分组会产生重复 key（reconciliation 异常 + 控制台告警），同一品类分散多处也不利于照着买
+- 空 `items` 的分组被丢弃，不渲染空小标题
+
+**格式规则位置**：`MENU_FORMAT_RULE` 与 `SHOPPING_GROUPS` 放在 `src/lib/ai-prompts.ts`（与 `RECIPE_FORMAT_RULE` 同址）。**不能放在 `route.ts`**——Next.js 只允许路由文件导出 HTTP 方法等固定符号，导出常量会触发 `.next/types` 的 `OmitWithTag` 约束报错（`tsc` 失败）。
 
 **上限**：`days` 为 1~7 整数（`MAX_DAYS`），超出或非整数直接 400，**不静默收敛成 1**（避免用户以为买了 7 天的量）。该常量与点菜页表单位于 `src/lib/menu-form.ts`，前后端共用一份。
 
 **口径说明**：UI 在采购区块顶部标注「按 N 人 D 天估算，实际按家里存量和饭量调整」，避免用户把估算当成精确用量。
 
-输出协议：`<menu>{JSON}</menu>`（复用 ai-prompts 的平衡扫描解析）+ zod schema（dishes 的 category 五枚举、name/reason 非空；shopping 字符串数组）。失败重试一次同 AI 模块公共协议。
+输出协议：`<menu>{JSON}</menu>`（复用 ai-prompts 的平衡扫描解析）+ zod schema（dishes 的 category 五枚举、name/reason 非空；shopping 为 `{group, items[]}[]`，并兼容旧的扁平字符串数组）。失败重试一次同 AI 模块公共协议。
 
 ### per-dish 状态机
 

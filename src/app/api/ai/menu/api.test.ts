@@ -14,6 +14,7 @@ vi.mock('@/lib/recipe-store', async importOriginal => {
 })
 
 import { POST } from './route'
+import { MENU_FORMAT_RULE } from '@/lib/ai-prompts'
 import { aiComplete } from '@/lib/ai-client'
 import { listRecipes } from '@/lib/recipe-store'
 import type { Recipe } from '@/lib/recipe-types'
@@ -174,6 +175,20 @@ describe('POST /api/ai/menu', () => {
     expect(userMsg.content).not.toContain('经典家常菜为主')
   })
 
+  it('格式规则内嵌示例可被本接口解析（示例与 schema 一致，防「模型照抄坏示例」）', async () => {
+    // 与 ai-prompts 的「番茄炒蛋示例可被提取且通过校验」同款约束：
+    // 把系统提示词原文当作模型输出喂回来，必须能解析成功——否则模型照抄示例会导致每次调用都 502
+    aiCompleteMock.mockResolvedValueOnce(MENU_FORMAT_RULE)
+    const res = await POST(jsonReq({ people: 2 }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as MenuResponse
+    expect(body.dishes.map(d => d.name)).toEqual(['番茄炒蛋', '清炒油麦菜'])
+    expect(body.shopping).toEqual([
+      { group: '蔬菜', items: ['番茄 x2', '油麦菜 x1把'] },
+      { group: '肉禽蛋', items: ['鸡蛋 x3'] },
+    ])
+  })
+
   it('days=1（缺省）保持原有文案：不出现天数与采购基准，行为零变化', async () => {
     aiCompleteMock.mockResolvedValueOnce(aiOk)
     const res = await POST(jsonReq({ people: 3 }))
@@ -220,6 +235,26 @@ describe('POST /api/ai/menu', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as MenuResponse
     expect(body.shopping).toEqual(aiMenuGrouped.shopping)
+  })
+
+  it('同名分组自动合并（避免前端重复 key 与同一品类分散多处）', async () => {
+    const dup = {
+      dishes: [{ name: '番茄炒蛋', category: '荤菜', reason: '家常' }],
+      shopping: [
+        { group: '蔬菜', items: ['番茄 x2'] },
+        { group: '肉禽蛋', items: ['鸡蛋 x3'] },
+        { group: '蔬菜', items: ['青菜 x1把'] },
+      ],
+    }
+    aiCompleteMock.mockResolvedValueOnce(`<menu>${JSON.stringify(dup)}</menu>`)
+    const res = await POST(jsonReq({ people: 2, days: 2 }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as MenuResponse
+    // 保留首次出现的顺序，同名分组合并 items
+    expect(body.shopping).toEqual([
+      { group: '蔬菜', items: ['番茄 x2', '青菜 x1把'] },
+      { group: '肉禽蛋', items: ['鸡蛋 x3'] },
+    ])
   })
 
   it('模型退回旧的扁平字符串数组时自动归一化为单组，不触发重试', async () => {

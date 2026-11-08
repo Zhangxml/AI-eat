@@ -1,7 +1,8 @@
 'use client'
 
 // 点菜页（Task 14，设计 5.4.1 两段式）
-// 第一段：人数（≥1 整数）+ 口味偏好（选填）→ POST /api/ai/menu → 菜卡列表（菜名/分类徽标/推荐理由）+ 采购建议区块
+// 第一段：人数（1~50）+ 天数（1~7，选填，缺省 1）+ 口味偏好（选填）→ POST /api/ai/menu
+//         → 菜卡列表（菜名/分类徽标/推荐理由）+ 采购建议区块（按品类分组，按 人数×天数 估总量）
 // 第二段：每张菜卡独立「生成菜谱」→ POST /api/ai/recipes { dish: 菜名, servings: people }
 //         注意：该接口 200 为 { recipe } 包裹形状，与 /api/recipes 入库接口返回的裸 Recipe 不同，须取 data.recipe
 //         → 200 后该菜卡下方展开 RecipeCard（含入库按钮）
@@ -18,7 +19,7 @@ import { MenuEpoch } from '@/lib/menu-epoch'
 import { MAX_DAYS, MAX_PEOPLE, MAX_TEXT_CHARS, validateMenuForm } from '@/lib/menu-form'
 import type { Recipe } from '@/lib/recipe-types'
 
-// Task 13 契约：POST /api/ai/menu → 200 { dishes, shopping }（category 限五枚举，name/reason 必填）
+// /api/ai/menu 契约：200 { dishes: {name,category,reason}[], shopping: {group,items[]}[] }（category 限五枚举，name/reason 必填）
 interface MenuDish {
   name: string
   category: '荤菜' | '素菜' | '汤' | '主食' | '其他'
@@ -107,7 +108,7 @@ export default function DishesPage() {
     return () => abortRef.current?.abort()
   }, [])
 
-  // 第一段：开始点菜 → POST /api/ai/menu（契约 Task 13：200 { dishes, shopping } | 400/502/503 { error: 中文 }）
+  // 第一段：开始点菜 → POST /api/ai/menu（200 { dishes, shopping } | 400/502/503 { error: 中文 }）
   async function handleMenu() {
     if (menuLoading) return
     // 前置校验与 /api/ai/menu 共用同一份规则（人数/天数/偏好），不发无效请求

@@ -132,6 +132,10 @@ export const RECIPE_FORMAT_RULE = [
   '<recipe>{"id":"r-1730000000-ab12cd","name":"番茄炒蛋","category":"荤菜","servings":2,"difficulty":"简单","totalTimeMin":20,"tags":["家常菜","快手菜"],"ingredients":[{"name":"番茄","amount":"2个（约300g）"},{"name":"鸡蛋","amount":"3个"}],"steps":["番茄切块……","热锅下油……"],"nutrition":{"caloriesKcal":180,"proteinG":8,"fatG":10,"carbG":12,"estimated":true},"source":"ai","createdAt":"2026-11-07T12:00:00.000Z","updatedAt":"2026-11-07T12:00:00.000Z"}</recipe>',
 ].join('\n')
 
+// 买什么（/api/ai/menu）采购分组：固定五类 + 「其他」兜底。
+// 与超市分区一致，列表结构稳定（不会这次 4 组、下次 7 组），前端按 group 渲染小标题。
+export const SHOPPING_GROUPS = ['肉禽蛋', '蔬菜', '豆制品', '主食', '调料', '其他'] as const
+
 // 聊天内食材推荐清单格式规则（chat 接口专用）：用户给出食材时输出 <menu> 清单而非直接生成完整菜谱。
 // 与买什么（/api/ai/menu）的区别：这边有食材输入——每道菜标注主角食材，菜数由食材自然搭配决定
 // （可合并成一道菜，不要求菜数等于食材数；每种主要食材都要在推荐里有用途）；
@@ -246,3 +250,21 @@ export function extractJson<T>(text: string, parse: (s: string) => T | null): T 
   }
   return null
 }
+
+// 买什么（/api/ai/menu）的输出格式规则：<menu>{完整菜单 JSON}</menu>
+// 放在本模块而非 route.ts：Next.js 只允许路由文件导出 HTTP 方法等固定符号，
+// 导出常量会触发 .next/types 的 OmitWithTag 约束报错；此处也与 RECIPE_FORMAT_RULE 同址。
+// 内嵌示例由单测锁定「可被 menuSchema 解析」，防模型照抄坏示例导致每次调用都 502。
+export const MENU_FORMAT_RULE = [
+  '输出格式强制要求：你可以先用一两句话介绍，介绍文字之后必须输出一个 <menu> 标签，',
+  '标签内放置一份完整的菜单 JSON（不要在 JSON 外再加其他文字），最后以 </menu> 结束。',
+  'JSON 字段模板如下：',
+  '{',
+  '  "dishes": [{ "name": "<菜名>", "category": "<荤菜|素菜|汤|主食|其他 之一>", "reason": "<推荐理由，一两句话>" }],',
+  '  "shopping": [{ "group": "<品类>", "items": ["<食材 总量>", "<食材 总量>"] }]',
+  '}',
+  'dishes 至少一道；category 只能取 荤菜/素菜/汤/主食/其他 之一。',
+  `shopping 按品类分组，group 取 ${SHOPPING_GROUPS.join('/')} 之一；items 为该品类下的食材与总量。`,
+  '完整示例（2 人餐）：',
+  '<menu>{"dishes":[{"name":"番茄炒蛋","category":"荤菜","reason":"家常下饭，酸甜开胃"},{"name":"清炒油麦菜","category":"素菜","reason":"清爽解腻"}],"shopping":[{"group":"蔬菜","items":["番茄 x2","油麦菜 x1把"]},{"group":"肉禽蛋","items":["鸡蛋 x3"]}]}</menu>',
+].join('\n')

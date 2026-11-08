@@ -1,13 +1,13 @@
 // POST /api/ai/menu：AI 点菜接口（Task 13，设计 5.2）
-// 契约：body { people: number; preference?: string }（people 必填 ≥1 整数，preference 可选口味偏好）
-// → 200 { dishes: { name; category: '荤菜'|'素菜'|'汤'|'主食'|'其他'; reason }[]; shopping: string[] }
+// 契约：body { people: number; days?: number; preference?: string }（people 必填 1~50；days 可选 1~7 缺省 1；preference 可选）
+// → 200 { dishes: { name; category: '荤菜'|'素菜'|'汤'|'主食'|'其他'; reason }[]; shopping: { group; items[] }[] }
 //   （zod schema 轻量校验，不含步骤；菜单构成考虑人数/荤素搭配/创意方向，库摘要仅防完全重复）
 // | 400 { error }（people 缺失/非法）| 503 { error }（AI 未配置，loadAiConfig throw）
 // | 502 { error: 'AI 输出两次均无法解析…' }（第一次解析失败重试一次，仍失败才 502，模式与 Task 10 一致）
 // 说明：menu 的 zod schema 仅本接口单一消费者，放在 route 文件内，不独立 lib
 import { z } from 'zod'
 import { loadAiConfig, aiComplete, type ChatMessage } from '@/lib/ai-client'
-import { systemPromptWithLibrary, extractJson } from '@/lib/ai-prompts'
+import { systemPromptWithLibrary, extractJson, MENU_FORMAT_RULE, SHOPPING_GROUPS } from '@/lib/ai-prompts'
 import { listRecipes } from '@/lib/recipe-store'
 import { readSettings } from '@/lib/settings-store'
 import type { Recipe } from '@/lib/recipe-types'
@@ -37,8 +37,27 @@ const dishSchema = z
   })
   .strict()
 
-// 采购分组：固定五类 + 「其他」兜底（与超市分区一致，列表结构稳定，不会这次 4 组下次 7 组）
-const SHOPPING_GROUPS = ['肉禽蛋', '蔬菜', '豆制品', '主食', '调料', '其他'] as const
+// 合并同名分组（模型偶尔把同一品类拆成多段）：保留首次出现顺序，items 顺序拼接。
+// 必要性：前端以 group 作为 React key，同名分组会产生重复 key（reconciliation 异常 + 控制台告警），
+// 且同一品类分散多处也不利于照着买。
+function mergeShoppingGroups(groups: { group: string; items: string[] }[]): {
+  group: string
+  items: string[]
+}[] {
+  const order: string[] = []
+  const itemsByGroup = new Map<string, string[]>()
+  for (const g of groups) {
+    if (g.items.length === 0) continue // 空分组不展示
+    const existing = itemsByGroup.get(g.group)
+    if (existing) {
+      existing.push(...g.items)
+    } else {
+      itemsByGroup.set(g.group, [...g.items])
+      order.push(g.group)
+    }
+  }
+  return order.map(group => ({ group, items: itemsByGroup.get(group) as string[] }))
+}
 
 // 采购清单：新格式为分组数组；同时兼容模型退回旧的扁平字符串数组（归一化为单组「采购清单」）。
 // 容错放在解析层而非重试层——旧格式本身是合法输出，不该因结构差异浪费一次 AI 调用。
@@ -53,7 +72,7 @@ const shoppingSchema = z.union([
         items: z.array(z.string()),
       })
       .strict())
-    .transform(groups => groups.filter(g => g.items.length > 0)),
+    .transform(groups => mergeShoppingGroups(groups)),
 ])
 
 // 菜单整体：dishes 至少一道（推荐结果不允许为空），shopping 为分组采购清单
@@ -162,21 +181,6 @@ function buildUserMessage(input: {
   parts.push(pickInspiration(input.style))
   return parts.join('；') + '。'
 }
-
-// <menu> 标签输出格式规则（拼进系统提示词；JSON 模板与 extractMenuJson 的 menuSchema 对应）
-const MENU_FORMAT_RULE = [
-  '输出格式强制要求：你可以先用一两句话介绍，介绍文字之后必须输出一个 <menu> 标签，',
-  '标签内放置一份完整的菜单 JSON（不要在 JSON 外再加其他文字），最后以 </menu> 结束。',
-  'JSON 字段模板如下：',
-  '{',
-  '  "dishes": [{ "name": "<菜名>", "category": "<荤菜|素菜|汤|主食|其他 之一>", "reason": "<推荐理由，一两句话>" }],',
-  '  "shopping": [{ "group": "<品类>", "items": ["<食材 总量>", "<食材 总量>"] }]',
-  '}',
-  'dishes 至少一道；category 只能取 荤菜/素菜/汤/主食/其他 之一。',
-  `shopping 按品类分组，group 取 ${SHOPPING_GROUPS.join('/')} 之一；items 为该品类下的食材与总量。`,
-  '完整示例（2 人餐）：',
-  '<menu>{"dishes":[{"name":"番茄炒蛋","category":"荤菜","reason":"家常下饭，酸甜开胃"},{"name":"清炒油麦菜","category":"素菜","reason":"清爽解腻"}],"shopping":[{"group":"蔬菜","items":["番茄 x2","油麦菜 x1把"]},{"group":"肉禽蛋","items":["鸡蛋 x3"]}]}</menu>',
-].join('\n')
 
 // POST handler：参数校验 → 400；AI 配置 → 503；生成+解析（失败重试一次）→ 200/502
 // 访问日志（方案 A）：AI 调用是成本敏感操作，成功失败都记录（400/502/503/200）
