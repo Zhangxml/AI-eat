@@ -25,7 +25,9 @@ const CHAT_MAX_MESSAGES = 50
 const CHAT_MAX_CONTENT_CHARS = 8000
 const CHAT_MAX_TOTAL_CHARS = 50000
 
-// 校验 body：messages 须为非空数组，每项为合法 ChatMessage（role 枚举 + 字符串 content）；非法返回 null（route 层转 400）
+// 校验 body：messages 须为非空数组，每项为合法 ChatMessage；非法返回 null（route 层转 400）
+// 审计 #14：只接受 user/assistant——客户端自带 system 消息会排在服务端注入的系统提示词之后，
+// 可借此改写格式约束/人设（默认免登录场景等于把「带 key 的代理」交给任意局域网设备），一律拒绝
 async function parseInput(req: Request): Promise<ChatMessage[] | null> {
   let body: unknown
   try {
@@ -40,7 +42,7 @@ async function parseInput(req: Request): Promise<ChatMessage[] | null> {
   for (const m of messages) {
     if (typeof m !== 'object' || m === null) return null
     const { role, content } = m as Record<string, unknown>
-    if ((role !== 'system' && role !== 'user' && role !== 'assistant') || typeof content !== 'string') {
+    if ((role !== 'user' && role !== 'assistant') || typeof content !== 'string') {
       return null
     }
     out.push({ role, content })

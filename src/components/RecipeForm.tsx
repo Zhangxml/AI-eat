@@ -93,8 +93,11 @@ export default function RecipeForm({
 
   // 食材名非空集合：AI 按钮可用性判断与请求体共用
   const ingredientNames = ingredients.map((r) => r.name.trim()).filter((n) => n !== '')
-  // AI 按钮禁用条件（裁定 3）：名称与食材（至少一行食材名非空）任一不满足，或请求进行中
-  const aiDisabled = submitting || estimating || name.trim() === '' || ingredientNames.length === 0
+  // aiBusy 统一三个互斥请求进行中标志（提交/估算/生成）——审计 #14 要求两处共用同一口径，
+  // 放在 aiDisabled 之前定义，估算按钮/守卫与生成按钮全部引用（补生成中时估算仍可点的漏洞）
+  const aiBusy = submitting || estimating || generating
+  // AI 估算按钮禁用条件（裁定 3）：任一 AI 请求进行中（含整份生成），或名称/食材未填
+  const aiDisabled = aiBusy || name.trim() === '' || ingredientNames.length === 0
 
   // 组装 DraftRecipe；行级/数字级校验失败时 alert 具体原因并返回 null（顶层必填项由原生校验先拦截）
   function buildDraft(): DraftRecipe | null {
@@ -255,9 +258,6 @@ export default function RecipeForm({
   // AI 整份生成（按名称）：调 POST /api/ai/recipes { dish: 名称 }，成功后把整份菜谱回填表单各字段。
   // 只回填不保存：source 保持 'manual'（用户核对修改后手动保存，保存动作仍走表单提交），
   // 营养/分类由 AI 结果带入但用户可随意改；名称为唯一必要输入。
-  // aiBusy 统一三个互斥请求进行中标志（提交/估算/生成）：估算按钮与 aiDisabled 共用同一口径，
-  // 任一 AI 请求进行中都不允许触发第二个（避免并发回填互相覆盖表单字段）
-  const aiBusy = submitting || estimating || generating
   async function handleGenerate() {
     const trimName = name.trim()
     if (trimName === '' || aiBusy) return
