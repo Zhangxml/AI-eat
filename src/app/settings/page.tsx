@@ -223,8 +223,9 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* 鉴权状态展示：PASSWORD 是否启用（无圆角直角卡片，与删除保护卡以 12px 间隔分开） */}
-      <section className="mb-3 rounded-none border border-neutral-200 p-4 dark:border-neutral-800">
+      {/* 鉴权状态展示：PASSWORD 是否启用。与删除保护卡构成一组（分组卡片样式）：
+          上卡只留顶部圆角、下卡只留底部圆角，两卡贴合无间隔，组间与其他卡片一致（mb-6） */}
+      <section className="rounded-t-xl border border-b-0 border-neutral-200 p-4 dark:border-neutral-800">
         <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">访问鉴权</h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
           {config === null
@@ -236,7 +237,7 @@ export default function SettingsPage() {
       </section>
 
       {/* 删除保护状态展示：DELETE_ENABLED+DELETE_PASSWORD 是否启用（删除菜谱需输密码，服务端校验） */}
-      <section className="rounded-none border border-neutral-200 p-4 dark:border-neutral-800">
+      <section className="rounded-b-xl border border-neutral-200 p-4 dark:border-neutral-800">
         <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">删除保护</h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
           {config === null
