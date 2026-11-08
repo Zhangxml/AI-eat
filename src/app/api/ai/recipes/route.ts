@@ -16,6 +16,12 @@ import { pickInspiration } from '@/lib/inspiration'
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
 
+// 入参上限（审查修复）：食材条数/单项长度/菜名长度/份数都直接进提示词，
+// 不设上限时超长输入会把单次调用成本放大（chat 与 nutrition 早已有限制，这里补齐）
+const MAX_LIST_ITEMS = 50
+const MAX_TEXT_CHARS = 500
+const MAX_SERVINGS = 50
+
 // 读取 JSON body 并做参数校验；非法返回 null（route 层转 400）
 async function parseInput(
   req: Request,
@@ -30,23 +36,35 @@ async function parseInput(
   const b = body as Record<string, unknown>
 
   // ingredients：可选字符串数组（每项 trim 后须非空；整体 trim 后全空视为未提供）
+  // 上限（审查修复）：数组过长或单元素过长会把提示词放大，直接抬高 token 成本
   let ingredients: string[] | undefined
   if (b.ingredients !== undefined) {
     if (!Array.isArray(b.ingredients) || !b.ingredients.every(i => typeof i === 'string')) {
       return null
     }
     const trimmed = (b.ingredients as string[]).map(s => s.trim()).filter(s => s !== '')
+    if (trimmed.length > MAX_LIST_ITEMS) return null
+    if (trimmed.some(s => s.length > MAX_TEXT_CHARS)) return null
     if (trimmed.length > 0) ingredients = trimmed
   }
 
-  // dish：可选非空字符串
+  // dish：可选非空字符串，超长拒绝
   let dish: string | undefined
-  if (typeof b.dish === 'string' && b.dish.trim() !== '') dish = b.dish.trim()
+  if (typeof b.dish === 'string') {
+    const trimmed = b.dish.trim()
+    if (trimmed.length > MAX_TEXT_CHARS) return null
+    if (trimmed !== '') dish = trimmed
+  }
 
-  // servings：可选正整数
+  // servings：可选正整数，1~MAX_SERVINGS
   let servings: number | undefined
   if (b.servings !== undefined) {
-    if (typeof b.servings !== 'number' || !Number.isInteger(b.servings) || b.servings < 1) {
+    if (
+      typeof b.servings !== 'number' ||
+      !Number.isInteger(b.servings) ||
+      b.servings < 1 ||
+      b.servings > MAX_SERVINGS
+    ) {
       return null
     }
     servings = b.servings
@@ -84,7 +102,12 @@ export async function POST(req: Request): Promise<Response> {
   const input = await parseInput(req)
   if (!input) {
     await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 400 })
-    return Response.json({ error: '参数缺失或非法：ingredients 与 dish 至少提供一个，servings 须为正整数' }, { status: 400 })
+    return Response.json(
+      {
+        error: `参数缺失或非法：ingredients（≤${MAX_LIST_ITEMS} 项、每项 ≤${MAX_TEXT_CHARS} 字符）与 dish（≤${MAX_TEXT_CHARS} 字符）至少提供一个，servings 须为 1~${MAX_SERVINGS} 的整数`,
+      },
+      { status: 400 },
+    )
   }
 
   // AI 未配置：loadAiConfig throw 中文错误 → 503（env 真实路径，测试只 mock aiComplete）

@@ -192,6 +192,9 @@ describe('POST /api/ai/recipes', () => {
       { ingredients: '番茄' }, // 非数组
       { dish: 123 }, // 非字符串
       { ingredients: ['番茄'], servings: 0 }, // servings 非正整数
+      { ingredients: Array.from({ length: 51 }, () => '番茄') }, // 食材超 50 项
+      { dish: '鱼'.repeat(501) }, // 菜名超 500 字符
+      { ingredients: ['番'], servings: 51 }, // 份数超上限
     ]
     for (const body of badBodies) {
       const res = await POST(jsonReq(body))

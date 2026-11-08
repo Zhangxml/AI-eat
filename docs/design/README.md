@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | 菜谱存储 | [storage](./storage/README.md) | 一菜一 JSON 文件，原子写、strict 校验、路径安全守卫，全库唯一触盘层 |
 | AI 接入 | [ai](./ai/README.md) | OpenAI 兼容直调三供应商；标签协议+平衡扫描解析+重试；库摘要注入；AI 输出 id/时间戳无条件覆写 |
-| AI 对话 | [chat](./chat/README.md) | 首页「问问AI」：SSE 四事件协议流式聊天，菜谱卡片一键入库（所见即所得） |
+| AI 对话 | [chat](./chat/README.md) | 首页「问问AI」：SSE 五事件协议流式聊天（message/recipe/menu/error/done），菜谱卡片一键入库（所见即所得） |
 | 点菜·买什么 | [menu](./menu/README.md) | 两段式：人数+偏好→菜单+采购清单；感兴趣的菜按需生成完整菜谱入库 |
 | 菜谱库界面 | [recipes-ui](./recipes-ui/README.md) | 列表/录入（AI 回填）/详情三页 + 共用表单；裸形状契约与历史坑位说明 |
 | 鉴权 | [auth](./auth/README.md) | PASSWORD 登录会话（HMAC token）+ 删除保护（DELETE_PASSWORD），环境变量开关，未设即零摩擦 |

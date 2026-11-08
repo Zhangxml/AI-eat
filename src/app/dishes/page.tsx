@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
 import RecipeCard from '@/components/RecipeCard'
+import { MenuEpoch } from '@/lib/menu-epoch'
 import type { Recipe } from '@/lib/recipe-types'
 
 // Task 13 契约：POST /api/ai/menu → 200 { dishes, shopping }（category 限五枚举，name/reason 必填）
@@ -88,6 +89,9 @@ export default function DishesPage() {
   // 请求取消（审计修复）：点菜/逐菜生成的进行中请求挂到 AbortController，组件卸载时 abort，
   // 卸载后不再 setState；ref 保活，回调读到最新实例
   const abortRef = useRef<AbortController | null>(null)
+  // 菜单代次（审查修复）：重新点菜后，上一份菜单里发起的「生成菜谱」请求若晚到，
+  // 会按菜名写回并显示上一个菜单的菜谱。用代次判断丢弃这类过期结果。
+  const menuEpochRef = useRef(new MenuEpoch())
   useEffect(() => {
     return () => abortRef.current?.abort()
   }, [])
@@ -130,6 +134,8 @@ export default function DishesPage() {
       }
       const data = (await res.json()) as { dishes: MenuDish[]; shopping: string[] }
       // 新菜单覆盖旧菜单，并重置全部 per-dish 状态（人数/偏好变了，旧菜卡的生成与入库状态不再适用）
+      // 推进菜单代次：此前发起的「生成菜谱」请求返回时会被判为过期并丢弃
+      menuEpochRef.current.bump()
       setMenu({ people, dishes: data.dishes, shopping: data.shopping })
       setDishStates({})
       setSavedNames({})
@@ -149,6 +155,8 @@ export default function DishesPage() {
     const st = dishStates[name]
     // 幂等兜底：该菜已在生成中或已就绪直接返回（按钮禁用为主，此判断防极端连点/同名菜重复调用）
     if (st && (st.phase === 'generating' || st.phase === 'ready')) return
+    // 记录发起时的菜单代次：返回时若用户已重新点菜（代次变化），结果作废不写回
+    const requestEpoch = menuEpochRef.current.value
     setDishStates((prev) => ({ ...prev, [name]: { phase: 'generating' } }))
     try {
       const controller = new AbortController()
@@ -161,6 +169,8 @@ export default function DishesPage() {
       })
       // 卸载触发的 abort：结果作废，不再 setState
       if (controller.signal.aborted) return
+      // 菜单已被替换（用户重新点菜）：丢弃过期结果，避免把上一份菜单的菜谱写进新菜单
+      if (menuEpochRef.current.isStale(requestEpoch)) return
       if (res.ok) {
         // 注意：/api/ai/recipes 200 为 { recipe } 包裹形状（与 /api/recipes 入库接口的裸 Recipe 不同）
         const data = (await res.json()) as { recipe: Recipe }
@@ -191,6 +201,8 @@ export default function DishesPage() {
     } catch {
       // 卸载触发的 abort 不再 setState；其余网络异常回 idle 允许重试
       if (abortRef.current?.signal.aborted) return
+      // 菜单已被替换：过期请求的失败也无需提示（对应菜卡已随旧菜单一起消失）
+      if (menuEpochRef.current.isStale(requestEpoch)) return
       setDishStates((prev) => ({ ...prev, [name]: { phase: 'idle', error: '网络异常，请稍后重试' } }))
     }
   }

@@ -196,6 +196,8 @@ describe('POST /api/ai/menu', () => {
       { people: -2 }, // 负数
       { people: 2.5 }, // 非整数
       { people: '3' }, // 非数字
+      { people: 51 }, // 超过人数上限（审查修复：防 people=1e9 生成超长提示词/巨额 token）
+      { people: 2, preference: '清'.repeat(501) }, // preference 超 500 字符
     ]
     for (const body of badBodies) {
       const res = await POST(jsonReq(body))

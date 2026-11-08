@@ -100,6 +100,12 @@ export default function RecipeForm({
 
   // 食材名非空集合：AI 按钮可用性判断与请求体共用
   const ingredientNames = ingredients.map((r) => r.name.trim()).filter((n) => n !== '')
+  // 营养估算用：带上用量（「番茄 2个」与「番茄 500g」营养差一倍，只发名称会明显失真）
+  const ingredientSpecs = ingredients
+    .map((r) => `${r.name.trim()} ${r.amount.trim()}`.trim())
+    .filter((s) => s !== '')
+  // 营养估算用：带上已填步骤（烹饪方式影响油脂与水分）
+  const filledSteps = steps.map((s) => s.trim()).filter((s) => s !== '')
   // aiBusy 统一三个互斥请求进行中标志（提交/估算/生成）——审计 #14 要求两处共用同一口径，
   // 放在 aiDisabled 之前定义，估算按钮/守卫与生成按钮全部引用（补生成中时估算仍可点的漏洞）
   const aiBusy = submitting || estimating || generating
@@ -190,7 +196,9 @@ export default function RecipeForm({
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    if (submitting) return
+    // 审查修复：AI 生成/估算进行中不允许提交——否则会先保存半成品，
+    // 随后 AI 回填覆盖表单，造成「保存的」与「看到的」不一致
+    if (aiBusy) return
     const draft = buildDraft()
     if (!draft) return
     setSubmitting(true)
@@ -225,7 +233,11 @@ export default function RecipeForm({
       const res = await apiFetch('/api/ai/nutrition', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dish: name.trim(), ingredients: ingredientNames }),
+        body: JSON.stringify({
+          dish: name.trim(),
+          ingredients: ingredientSpecs,
+          steps: filledSteps,
+        }),
       })
       if (res.status === 503) {
         // 契约：503 = AI 未配置，文案单独区分
@@ -616,10 +628,10 @@ export default function RecipeForm({
         </div>
       </section>
 
-      {/* 提交：全宽大按钮，触摸目标远超 44px */}
+      {/* 提交：全宽大按钮，触摸目标远超 44px；AI 请求进行中也禁用（防保存半成品） */}
       <button
         type="submit"
-        disabled={submitting}
+        disabled={aiBusy}
         className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300"
       >
         {submitting ? '保存中…' : submitLabel}

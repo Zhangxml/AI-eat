@@ -19,6 +19,11 @@ import { pickInspiration } from '@/lib/inspiration'
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案，与 Task 10/11 同款）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
 
+// 入参上限（审查修复）：people 过大或 preference 过长都会把提示词放大到不成比例，
+// 直接抬高一次 AI 调用的 token 成本（曾实测 people=1000000 可正常出菜单）
+const MAX_PEOPLE = 50
+const MAX_TEXT_CHARS = 500
+
 // 菜单项：轻量三字段（不含步骤/食材明细），category 限五枚举，name/reason 必填非空
 const dishSchema = z
   .object({
@@ -62,14 +67,17 @@ async function parseInput(
   if (typeof body !== 'object' || body === null) return null
   const b = body as Record<string, unknown>
 
-  // people：必填正整数（缺失、0、负数、小数、非数字均 400）
-  if (typeof b.people !== 'number' || !Number.isInteger(b.people) || b.people < 1) return null
+  // people：必填正整数，1~MAX_PEOPLE（上限防「people=1e9」生成超长提示词、放大 token 成本）
+  if (typeof b.people !== 'number' || !Number.isInteger(b.people) || b.people < 1 || b.people > MAX_PEOPLE) {
+    return null
+  }
 
-  // preference：可选字符串；提供了但类型非法（非 string）→ 400，不静默丢弃用户意图
+  // preference：可选字符串；提供了但类型非法（非 string）或超长 → 400，不静默丢弃用户意图
   let preference: string | undefined
   if (b.preference !== undefined) {
     if (typeof b.preference !== 'string') return null
     const trimmed = b.preference.trim()
+    if (trimmed.length > MAX_TEXT_CHARS) return null
     if (trimmed !== '') preference = trimmed
   }
   return { people: b.people, preference }
@@ -118,7 +126,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!input) {
     await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/menu', status: 400 })
     return Response.json(
-      { error: '参数缺失或非法：people 须为不小于 1 的整数，preference 须为字符串' },
+      { error: `参数缺失或非法：people 须为 1~${MAX_PEOPLE} 的整数，preference 须为不超过 ${MAX_TEXT_CHARS} 字符的字符串` },
       { status: 400 },
     )
   }

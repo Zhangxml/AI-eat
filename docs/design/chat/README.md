@@ -59,7 +59,7 @@ event: done      data: {}                          ← 收尾（error 之后照�
 
 ### 前端（ChatView）
 
-- `readSse` 消费四类事件；menu 事件挂到当前 assistant 消息下方渲染清单卡片（每菜一行：菜名+主料徽标+理由，理由中说明用到的食材）
+- `readSse` 消费五类事件（message/recipe/menu/error/done）；menu 事件挂到当前 assistant 消息下方渲染清单卡片（每菜一行：菜名+主料徽标+理由，理由中说明用到的食材）
 - **逐菜生成**：每道菜的「生成菜谱」按钮 → `POST /api/ai/recipes { dish }` → 该菜下方展开 RecipeCard → 入库。`dishStates` 以「消息下标:菜名」为键（跨清单同名菜互不干扰），per-dish 独立 loading 互不阻塞，失败局部红字可重试
 - 入库：toDraft 剥离+savedIds/savingIds 双防抖（与原单菜谱路径完全同款）
 - 组包 `buildHistory`：取最近 5 轮 + 首条用户消息锚点，过滤空文本气泡（保留空正文但有结构化输出的轮次），累计全部轮次菜名成一行摘要，末尾追加当前 user 消息；聊天记录不持久化
