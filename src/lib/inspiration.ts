@@ -37,7 +37,8 @@ function pickIndex(length: number, rng: () => number): number {
 }
 
 // 生成指定档位的灵感方向文案（每次调用随机；测试可注入固定 rng 断言）。
-// 注意：style 必须显式传第一个参数（不传默认 'home'）；rng 永远是第二个参数
+// 注意：style 是必填的第一个参数（调用方必须显式传 'home' | 'creative'，不传会因取不到词池而报错）；
+// rng 永远是第二个参数
 export function pickInspiration(style: InspirationStyle, rng: () => number = Math.random): string {
   const technique = INSPIRATION_TECHNIQUES[style][pickIndex(INSPIRATION_TECHNIQUES[style].length, rng)]
   const flavor = INSPIRATION_STYLES[style][pickIndex(INSPIRATION_STYLES[style].length, rng)]

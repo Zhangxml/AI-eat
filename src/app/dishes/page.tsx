@@ -182,7 +182,7 @@ export default function DishesPage() {
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dish: name, servings: menu.people }),
+        body: JSON.stringify({ dish: name, servings: menu.people, style }),
         signal: controller.signal,
       })
       // 卸载触发的 abort：结果作废，不再 setState
