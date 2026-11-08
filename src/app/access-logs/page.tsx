@@ -17,6 +17,9 @@ interface AccessLogEntry {
   status: number
 }
 
+// 每页条数：50 条/页，1000 条上限即最多 20 页
+const PAGE_SIZE = 50
+
 // 状态码配色：2xx 绿（正常）、3xx/4xx 中 401/403 红（鉴权失败=有人在乱试）、其余灰
 function statusColor(status: number): string {
   if (status >= 200 && status < 300) return 'text-green-600 dark:text-green-400'
@@ -36,6 +39,9 @@ export default function AccessLogsPage() {
   const [logs, setLogs] = useState<AccessLogEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // 前端分页：数据一次拉全量（上限 1000 条，局域网传输无感），按 PAGE_SIZE 切片渲染，
+  // 避免一次渲染 1000 个 DOM 节点（手机渲染慢、列表长难翻找）
+  const [page, setPage] = useState(1)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -59,6 +65,17 @@ export default function AccessLogsPage() {
     void load()
   }, [load])
 
+  // 分页计算：总页数与当前页切片（logs 顺序为最新在前，页码越大越旧）
+  const totalPages = Math.max(1, Math.ceil(logs.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages) // 刷新后日志变少时页码收敛
+  const pageLogs = logs.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+  // 刷新时页码重置到第一页（新数据从最新看起）
+  const refresh = () => {
+    setPage(1)
+    return load()
+  }
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
       {/* 页头：标题 + 刷新 + 返回设置 */}
@@ -67,7 +84,7 @@ export default function AccessLogsPage() {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => void load()}
+            onClick={() => void refresh()}
             disabled={loading}
             aria-label="刷新访问记录"
             className="shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
@@ -95,36 +112,65 @@ export default function AccessLogsPage() {
         </div>
       )}
 
-      {/* 三态：加载 / 空 / 列表 */}
+      {/* 三态：加载 / 空 / 列表（分页切片渲染） */}
       {loading && logs.length === 0 ? (
         <p className="py-10 text-center text-sm text-neutral-400 dark:text-neutral-500">加载中…</p>
       ) : !loading && error === '' && logs.length === 0 ? (
         <p className="py-10 text-center text-sm text-neutral-400 dark:text-neutral-500">暂无访问记录</p>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {logs.map((log, i) => (
-            <li
-              key={`${log.time}-${i}`}
-              className="rounded-lg border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-900"
-            >
-              {/* 第一行：方法 + 路径（break-all 防长路径横滚）+ 状态码 */}
-              <div className="flex min-w-0 items-baseline gap-2">
-                <span className="shrink-0 font-mono text-sm font-medium text-neutral-900 dark:text-neutral-100">
-                  {log.method}
-                </span>
-                <span className="min-w-0 flex-1 break-all font-mono text-sm text-neutral-700 dark:text-neutral-300">
-                  {log.path}
-                </span>
-                <span className={`shrink-0 font-mono text-sm ${statusColor(log.status)}`}>{log.status}</span>
-              </div>
-              {/* 第二行：时间 + IP */}
-              <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-                <span>{formatTime(log.time)}</span>
-                <span className="break-all">IP: {log.ip}</span>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="flex flex-col gap-2">
+            {pageLogs.map((log, i) => (
+              <li
+                key={`${log.time}-${i}`}
+                className="rounded-lg border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-900"
+              >
+                {/* 第一行：方法 + 路径（break-all 防长路径横滚）+ 状态码 */}
+                <div className="flex min-w-0 items-baseline gap-2">
+                  <span className="shrink-0 font-mono text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                    {log.method}
+                  </span>
+                  <span className="min-w-0 flex-1 break-all font-mono text-sm text-neutral-700 dark:text-neutral-300">
+                    {log.path}
+                  </span>
+                  <span className={`shrink-0 font-mono text-sm ${statusColor(log.status)}`}>{log.status}</span>
+                </div>
+                {/* 第二行：时间 + IP */}
+                <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+                  <span>{formatTime(log.time)}</span>
+                  <span className="break-all">IP: {log.ip}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          {/* 分页控制：总数 / 页码 / 上一下一（多于一页才显示） */}
+          {totalPages > 1 && (
+            <nav aria-label="分页" className="mt-4 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={safePage <= 1}
+                aria-label="上一页"
+                className="min-h-[44px] rounded-lg border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:text-neutral-300 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800 dark:disabled:border-neutral-800 dark:disabled:text-neutral-600"
+              >
+                上一页
+              </button>
+              <span className="text-sm tabular-nums text-neutral-600 dark:text-neutral-400">
+                第 {safePage} / {totalPages} 页 · 共 {logs.length} 条
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safePage >= totalPages}
+                aria-label="下一页"
+                className="min-h-[44px] rounded-lg border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:text-neutral-300 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800 dark:disabled:border-neutral-800 dark:disabled:text-neutral-600"
+              >
+                下一页
+              </button>
+            </nav>
+          )}
+        </>
       )}
     </main>
   )
