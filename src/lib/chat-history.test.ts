@@ -140,4 +140,50 @@ describe('buildHistory 菜单摘要（支持「继续」去重）', () => {
     buildHistory(items, '继续')
     expect(items).toEqual(snapshot)
   })
+
+  it('超过 5 轮只保留最近 5 轮消息（控制请求体积，避免撞服务端 50 条上限）', () => {
+    const items: { role: 'user' | 'assistant'; text: string; menuDishNames?: string[] }[] = []
+    for (let i = 1; i <= 8; i++) {
+      items.push({ role: 'user', text: `u${i}` })
+      items.push({ role: 'assistant', text: `a${i}`, menuDishNames: [`第${i}轮菜`] })
+    }
+    const history = buildHistory(items, '继续')
+    // 5 轮 = 10 条历史 + 当前消息 1 条
+    expect(history).toHaveLength(11)
+    expect(history[0]).toEqual({ role: 'user', content: 'u4' })
+    expect(history[history.length - 1].content).toBe('继续')
+  })
+
+  it('裁剪历史时菜名摘要仍包含全部轮次（否则早期菜名丢失必然重复推荐）', () => {
+    const items: { role: 'user' | 'assistant'; text: string; menuDishNames?: string[] }[] = []
+    for (let i = 1; i <= 8; i++) {
+      items.push({ role: 'user', text: `u${i}` })
+      items.push({ role: 'assistant', text: `a${i}`, menuDishNames: [`第${i}轮菜`] })
+    }
+    const history = buildHistory(items, '继续')
+    const all = history.map((h) => h.content).join('\n')
+    // 前 3 轮消息已被裁掉，但菜名必须还在摘要里
+    expect(all).not.toContain('u1\n')
+    expect(all).toContain('第1轮菜')
+    expect(all).toContain('第8轮菜')
+  })
+
+  it('不足 5 轮时全部保留', () => {
+    const items = [
+      { role: 'user' as const, text: 'u1' },
+      { role: 'assistant' as const, text: 'a1' },
+      { role: 'user' as const, text: 'u2' },
+      { role: 'assistant' as const, text: 'a2' },
+    ]
+    expect(buildHistory(items, '继续')).toHaveLength(5)
+  })
+
+  it('第 20 轮继续时消息数远低于服务端 50 条上限', () => {
+    const items: { role: 'user' | 'assistant'; text: string }[] = []
+    for (let i = 1; i <= 20; i++) {
+      items.push({ role: 'user', text: `u${i}` })
+      items.push({ role: 'assistant', text: `a${i}` })
+    }
+    expect(buildHistory(items, '继续').length).toBeLessThanOrEqual(11)
+  })
 })

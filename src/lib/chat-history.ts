@@ -26,6 +26,22 @@ export interface HistoryMessage {
 const MAX_RECORDED_DISHES = 60
 // 单个菜名最大长度：过长名称会让该条 content 逼近服务端 8000 字符上限
 const MAX_DISH_NAME_LEN = 24
+// 只发送最近 N 轮对话（1 轮 = 1 条 user + 1 条 assistant）：
+// 服务端限制 50 条消息，不裁剪的话第 25 次「继续」就会 400；同时控制累积 token 成本。
+// 注意：菜名摘要不受此裁剪影响，仍按全部轮次累计（否则早期菜名丢失会导致重复推荐）。
+const MAX_HISTORY_TURNS = 5
+
+// 从后往前数 user 消息，定位最近 N 轮的起点；不足 N 轮时原样返回
+function recentTurnsOnly(items: HistoryInput[]): HistoryInput[] {
+  let userCount = 0
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].role === 'user') {
+      userCount++
+      if (userCount === MAX_HISTORY_TURNS) return items.slice(i)
+    }
+  }
+  return items
+}
 
 // 菜名净化：换行压成空格（防止把指令性文本以"模型自己的话"身份回灌）、去首尾空白、截断
 function sanitizeDishName(name: string): string {
@@ -56,9 +72,12 @@ export function collectRecommendedDishes(items: HistoryInput[]): string[] {
 }
 
 export function buildHistory(items: HistoryInput[], text: string): HistoryMessage[] {
+  // 摘要用**全部**轮次累计：裁剪后的历史里早期菜名已不存在，但去重必须知道完整名单
   const dishes = collectRecommendedDishes(items)
+  // 历史只保留最近 MAX_HISTORY_TURNS 轮（控制体积与成本，避免撞服务端 50 条上限）
+  const recent = recentTurnsOnly(items)
   // 空文本但带结构化输出的轮次必须保留：服务端可能只发 menu/recipe 事件、不发正文（标签在开头时）
-  const kept = items.filter(
+  const kept = recent.filter(
     (it) =>
       it.text !== '' ||
       (it.role === 'assistant' && ((it.menuDishNames?.length ?? 0) > 0 || it.recipeName !== undefined)),
