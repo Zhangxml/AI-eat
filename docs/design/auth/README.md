@@ -48,7 +48,7 @@ DELETE /api/recipes/:id（启用时要求 body { deletePassword }）
 
 ### 状态可见性
 
-`GET /api/config` 回显 `{ authEnabled, deleteEnabled }` → 设置页两张状态卡片（「访问鉴权」「删除保护」），一眼确认安全状态；**绝不回显任何密码/key**（红线测试锁定字段名与注入值双断言）。
+`GET /api/config` 回显 `{ authEnabled, deleteEnabled }` → 设置页状态分组卡片（iOS 分组列表样式）：「访问鉴权」（组首，顶部圆角）→「删除保护」（中间，直角）→「访问记录」入口（组尾，底部圆角，点击进入 `/access-logs` 列表页）。三卡贴合无间隔，一眼确认安全状态；**绝不回显任何密码/key**（红线测试锁定字段名与注入值双断言）。
 
 ### 访问记录（方案 A：敏感操作审计）
 
