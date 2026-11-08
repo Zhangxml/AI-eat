@@ -135,21 +135,9 @@ export default function DishesPage() {
     const confirmMsg = buildRegenConfirmMessage(unsaved)
     if (confirmMsg !== null && !window.confirm(confirmMsg)) return
 
-    // 取消所有在途的逐菜生成：客户端不再等待，晚到的结果也不会写回。
-    // 注意：服务端未把 req.signal 透传给上游（ai-client 只有 120s 超时），所以上游 AI 调用
-    // 仍会跑完——本次取消只止损「用户等待与界面污染」，不节省上游 token。
-    // 被取消的菜复位为 idle（可重试），避免停在「生成中…」永远转圈。
-    const cancelled = dishAbortsRef.current.abortAll()
-    if (cancelled.length > 0) {
-      setDishStates((prev) => {
-        const next = { ...prev }
-        for (const name of cancelled) {
-          // 只复位仍处于 generating 的（期间已完成的保留，返回时代次守卫会丢弃其写回）
-          if (next[name]?.phase === 'generating') delete next[name]
-        }
-        return next
-      })
-    }
+    // 注意：这里【不】取消在途的逐菜生成。点菜可能失败（400/502/503/网络异常），
+    // 失败时旧菜单原样保留，用户的在途生成应当继续跑完——若在发请求前就 abort，
+    // 用户会白等十几秒还得重点一次「生成菜谱」。取消动作放在「新菜单确实到手」之后。
 
     setFormError('')
     setMenuError('')
@@ -181,9 +169,11 @@ export default function DishesPage() {
         return
       }
       const data = (await res.json()) as { dishes: MenuDish[]; shopping: ShoppingGroup[] }
-      // 新菜单覆盖旧菜单，并重置全部 per-dish 状态（人数/偏好变了，旧菜卡的生成与入库状态不再适用）
-      // 推进菜单代次：此前发起的「生成菜谱」请求返回时会被判为过期并丢弃
+      // 新菜单确认到手：推进代次（此前发起的生成请求返回时被判为过期，不写回旧菜名），
+      // 再取消这些在途请求（客户端不再等待；服务端未透传 req.signal，上游调用仍会跑完，
+      // 此处只止损「用户等待与界面污染」，不节省上游 token）。
       menuEpochRef.current.bump()
+      dishAbortsRef.current.abortAll()
       setMenu({ people, days, dishes: data.dishes, shopping: data.shopping })
       setDishStates({})
       setSavedNames({})
@@ -257,8 +247,9 @@ export default function DishesPage() {
       if (menuEpochRef.current.isStale(requestEpoch)) return
       setDishStates((prev) => ({ ...prev, [name]: { phase: 'idle', error: '网络异常，请稍后重试' } }))
     } finally {
-      // 请求结束（含中止）必注销登记，避免注册表无限增长
-      dishAbortsRef.current.delete(name)
+      // 请求结束（含中止）必注销登记，避免注册表无限增长；
+      // 传 controller 做身份校验——旧请求的 finally 可能晚于「新菜单上同名菜的新请求」的登记
+      dishAbortsRef.current.delete(name, controller)
     }
   }
 

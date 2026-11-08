@@ -27,6 +27,30 @@ describe('DishAborts 在途请求注册表', () => {
     expect(reg.names()).toEqual([])
   })
 
+  it('delete 带实例校验时只注销自己，不误删后来登记的同名请求', () => {
+    const reg = new DishAborts()
+    const oldOne = new AbortController()
+    const newOne = new AbortController()
+    reg.set('番茄炒蛋', oldOne)
+    // 模拟：旧请求被中转取后，用户在新菜单上又对同名菜发起了新请求
+    reg.set('番茄炒蛋', newOne)
+    // 旧请求随后走到 finally，按实例注销
+    reg.delete('番茄炒蛋', oldOne)
+
+    // 新登记的请求必须还在（否则后续 abortAll/卸载会漏取消它）
+    expect(reg.names()).toEqual(['番茄炒蛋'])
+    expect(reg.abortAll()).toEqual(['番茄炒蛋'])
+    expect(newOne.signal.aborted).toBe(true)
+  })
+
+  it('delete 传实例且匹配时正常注销', () => {
+    const reg = new DishAborts()
+    const c = new AbortController()
+    reg.set('番茄炒蛋', c)
+    reg.delete('番茄炒蛋', c)
+    expect(reg.names()).toEqual([])
+  })
+
   it('abortAll 在空表上是 no-op（不抛错，返回空数组）', () => {
     const reg = new DishAborts()
     expect(reg.abortAll()).toEqual([])

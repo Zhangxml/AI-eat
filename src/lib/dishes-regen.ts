@@ -15,8 +15,14 @@ export class DishAborts {
     this.controllers.set(name, controller)
   }
 
-  /** 请求结束（成功/失败/中止）后移出登记表 */
-  delete(name: string): void {
+  /**
+   * 请求结束（成功/失败/中止）后移出登记表。
+   * 传 controller 时做身份校验：只注销「自己那一次」的登记。
+   * 必要性：旧请求的 finally 可能在「新菜单上对同名菜发起的新请求」登记之后才执行，
+   * 无条件 delete 会把新请求的引用删掉，导致后续 abortAll / 卸载漏取消它。
+   */
+  delete(name: string, controller?: AbortController): void {
+    if (controller !== undefined && this.controllers.get(name) !== controller) return
     this.controllers.delete(name)
   }
 

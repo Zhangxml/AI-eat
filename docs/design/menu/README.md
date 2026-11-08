@@ -74,7 +74,13 @@
 | --- | --- |
 | 「点菜中」旧菜单仍可点「生成菜谱」 | 生成按钮 `disabled` 增加 `menuLoading`，`handleGenerate` 内也兜底 return |
 | 新菜单落地时 `setDishStates({})` 静默清空 | 清空前统计「已生成未入库」道数，`window.confirm` 二次确认（已入库的不算，它们在菜谱库里）；用户取消则整次点菜不发生 |
-| 单槽 `abortRef` 只能取消最后一个请求 | 拆成 `menuAbortRef`（点菜）+ `dishAbortsRef: DishAborts`（按菜名登记，可全部取消）；重新点菜时取消全部在途生成并把对应菜复位为 `idle`（可重试，不留永久「生成中…」） |
+| 单槽 `abortRef` 只能取消最后一个请求 | 拆成 `menuAbortRef`（点菜）+ `dishAbortsRef: DishAborts`（按菜名登记，可全部取消）；`delete` 带实例校验，防止旧请求的 `finally` 误删同名新登记 |
+
+**取消时机放在「新菜单确认到手」之后，而不是发请求之前**：
+
+点菜可能失败（400/502/503/网络异常）。若在发请求前就取消在途生成，一旦点菜失败，旧菜单原样保留、但用户的在途生成已被中止并复位——用户白等十几秒还要重点一次「生成菜谱」。放到成功分支后，失败路径完全不动在途请求（实测：让点菜返回 502，在途生成照常落地为菜谱卡）。
+
+成功分支内的顺序是 `bump 代次 → abortAll → 替换菜单并清空 dish 状态`：先推进代次保证任何已解决的结果被判过期、不写回，再取消残留请求，最后整体替换。
 
 **能力边界（务必知晓）**：客户端 `abort` **不会中断服务端的上游 AI 调用**——`ai-client` 只有 120 秒超时，`/api/ai/menu`、`/api/ai/recipes`、`/api/ai/nutrition` 均未透传 `req.signal`（仅 `/api/ai/chat` 在流式转发途中取消 upstream reader）。因此这里的取消止损的是「用户等待与界面污染」，**不节省上游 token**。要真正止损需在 `AiCallOptions` 加 `signal` 并用 `AbortSignal.any([req.signal, timeout])` 合并，属独立改动。
 
