@@ -56,8 +56,8 @@ describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
     // 明确取消「一种食材对应一道菜」的硬绑定
     expect(CHAT_MENU_FORMAT_RULE).not.toContain('dishes 的数量与用户给出的食材数量一致')
     expect(CHAT_MENU_FORMAT_RULE).toContain('可以合并')
-    // 每种主要食材必须有用武之地
-    expect(CHAT_MENU_FORMAT_RULE).toContain('每种主要食材都要体现')
+    // 每种主要食材必须有用武之地（限定首轮清单）
+    expect(CHAT_MENU_FORMAT_RULE).toContain('首轮清单需让每种主要食材都有用途')
     // 禁止为凑数硬拆
     expect(CHAT_MENU_FORMAT_RULE).toContain('不要为了凑数量')
     // 食材本身就是一道菜的完整搭配时，只推荐这一道
@@ -74,6 +74,10 @@ describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
     expect(CHAT_MENU_FORMAT_RULE).toContain('尚未用到')
     // 「就这些」时不再输出清单
     expect(CHAT_MENU_FORMAT_RULE).toContain('不再输出')
+    // 食材覆盖限定首轮，避免继续轮硬凑
+    expect(CHAT_MENU_FORMAT_RULE).toContain('首轮')
+    // 明确要求做法时菜谱优先于清单（避免「开始做X」只回一句好的）
+    expect(CHAT_MENU_FORMAT_RULE).toContain('优先输出 <recipe>')
   })
 })
 
