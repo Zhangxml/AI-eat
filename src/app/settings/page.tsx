@@ -237,8 +237,9 @@ export default function SettingsPage() {
         </p>
       </section>
 
-      {/* 删除保护状态展示：DELETE_ENABLED+DELETE_PASSWORD 是否启用（删除菜谱需输密码，服务端校验） */}
-      <section className="rounded-b-xl border border-neutral-200 p-4 dark:border-neutral-800">
+      {/* 删除保护状态展示：DELETE_ENABLED+DELETE_PASSWORD 是否启用（删除菜谱需输密码，服务端校验）。
+          分组中间卡：无圆角、去下边框（与访问记录入口卡贴合） */}
+      <section className="rounded-none border border-b-0 border-neutral-200 p-4 dark:border-neutral-800">
         <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">删除保护</h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
           {config === null
@@ -249,10 +250,10 @@ export default function SettingsPage() {
         </p>
       </section>
 
-      {/* 访问记录入口：链接到 /access-logs 列表页（写操作与敏感操作的审计日志） */}
+      {/* 访问记录入口：状态组组尾卡（保留底部圆角，与上两卡贴合无间隔），点击进入 /access-logs 列表页 */}
       <Link
         href="/access-logs"
-        className="block rounded-xl border border-neutral-200 p-4 transition-colors active:bg-neutral-50 dark:border-neutral-800 dark:active:bg-neutral-900"
+        className="block rounded-b-xl border border-neutral-200 p-4 transition-colors active:bg-neutral-50 dark:border-neutral-800 dark:active:bg-neutral-900"
       >
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">访问记录</span>
