@@ -58,6 +58,16 @@
 
 输出协议：`<menu>{JSON}</menu>`（复用 ai-prompts 的平衡扫描解析）+ zod schema（dishes 的 category 五枚举、name/reason 非空；shopping 为 `{group, items[]}[]`，并兼容旧的扁平字符串数组）。失败重试一次同 AI 模块公共协议。
 
+**schema 不用 `.strict()`（刻意）**：模型偶尔自作主张加字段（`tips` / `note` / `difficulty` / `servings` …）。zod 默认会**剥离未知键、保留已声明字段**，因此：
+
+| 输入 | 结果 |
+| --- | --- |
+| 多出未知字段 | 正常解析，未知键被剥离（不进入响应，不污染前端契约），**不浪费一次上游调用** |
+| 缺必填字段（如菜品缺 `reason`） | 校验失败 → 重试 → 仍失败才 502（结构错误不放行） |
+| `category` 非五枚举 / `dishes` 为空 | 同上，失败并重试 |
+
+取舍理由：strict 的收益是「拒绝脏数据」，但我们本来就只读已声明字段；它的代价是**一个多余键就让整份 7 天菜单作废**（35 秒 + 3.5k tokens 白费）。风险与收益不对称。
+
 ### 并发：点菜 vs 逐菜生成
 
 两段式天然允许「菜单 A 的某道菜在生成中，用户又去点新菜」。改造前实测（无头浏览器把第二次点菜延迟 25 秒）：
@@ -74,7 +84,7 @@
 | --- | --- |
 | 「点菜中」旧菜单仍可点「生成菜谱」 | 生成按钮 `disabled` 增加 `menuLoading`，`handleGenerate` 内也兜底 return |
 | 新菜单落地时 `setDishStates({})` 静默清空 | 清空前统计「已生成未入库」道数，`window.confirm` 二次确认（已入库的不算，它们在菜谱库里）；用户取消则整次点菜不发生 |
-| 单槽 `abortRef` 只能取消最后一个请求 | 拆成 `menuAbortRef`（点菜）+ `dishAbortsRef: DishAborts`（按菜名登记，可全部取消）；`delete` 带实例校验，防止旧请求的 `finally` 误删同名新登记 |
+| 单槽 `abortRef` 只能取消最后一个请求 | 拆成 `menuAbortRef`（点菜）+ `dishAbortsRef: DishAborts`（按 `dishKey` 登记，可全部取消）；`delete` 带实例校验，防止旧请求的 `finally` 误删同一 key 的新登记 |
 
 **取消时机放在「新菜单确认到手」之后，而不是发请求之前**：
 
@@ -86,12 +96,23 @@
 
 纯逻辑抽在 `src/lib/dishes-regen.ts`（`DishAborts` + `countUnsavedRecipes` + `buildRegenConfirmMessage`），有单测覆盖。
 
+### per-dish 状态键：dishKey(下标, 菜名)
+
+`dishStates` / `savedNames` / `savingNames` / 在途请求注册表**一律以 `dishKey(菜单内下标, 菜名)` 为键**（`src/lib/dish-key.ts`）。
+
+早期以「菜名」为键（当时的理由是天然防同名菜重复调用）。菜单从 4 道扩到最多 21 道后，AI 给出同名菜（「米饭」「凉拌黄瓜」）的概率不再可忽略，而当时的后果是：**点第一道，第二道也变「已生成」，其菜谱永远看不到**。
+
+改用「下标 + 菜名」：同一份菜单内下标稳定；菜单整体替换时才变，而那时状态本就整体重置。关键是一致的——状态写入、入库防抖、在途取消、滚动定位（`li[data-dish-key]`）全部用同一个键。
+
+**无障碍的小遗留**：同名菜的 `aria-label`（`推荐菜：米饭` / `生成菜谱：米饭`）会重复。自动化请用 `li[data-dish-key]` 定位（已唯一）；读屏用户按列表项顺序浏览，歧义有限。要彻底消除需把下标并入 label，会改动既有选择器约定，暂不做。
+
 ### per-dish 状态机
 
-`Record<dishName, { phase: 'idle'|'generating'|'ready', recipe?, error? }>`：
+`Record<dishKey, { phase: 'idle'|'generating'|'ready', recipe?, error? }>`（键见上节）：
 
 - 每道菜独立请求独立状态，**互不阻塞**（一道生成中不影响看/生成其他菜）
-- 同名菜天然共用一份状态（键即菜名）→ 幂等防重复
+- 同一道菜共用一份状态（键即 dishKey）→ 幂等防重复；同名但不同位置的菜各自独立
+- **代价**：同名菜会各发一次 `/api/ai/recipes`（内容基本相同），各点一次「入库」会在菜谱库产生同名两条——`createRecipe` 不去重。旧实现靠「菜名即键」顺带省掉了这份重复，现在为了同名菜可用而放弃它；实测 5 份真实菜单（含 21 道）未出现重名，属低频取舍
 - 单菜失败局部红字、phase 回 idle 可重试，不污染其他菜
 - 菜谱生成成功后 `scrollIntoView` 自动滚到卡片（移动端卡片常在视口外，修复过「只见已生成不见内容」的体验问题）
 - `menu.people` 快照作 servings：生成菜单后改输入框不影响本次结果

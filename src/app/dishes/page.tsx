@@ -6,9 +6,10 @@
 // 第二段：每张菜卡独立「生成菜谱」→ POST /api/ai/recipes { dish: 菜名, servings: people }
 //         注意：该接口 200 为 { recipe } 包裹形状，与 /api/recipes 入库接口返回的裸 Recipe 不同，须取 data.recipe
 //         → 200 后该菜卡下方展开 RecipeCard（含入库按钮）
-// 各按钮加载态互不阻塞：per-dish 状态 Record<dishName, DishState>，一道菜生成中不影响其他菜
+// 各按钮加载态互不阻塞：per-dish 状态 Record<dishKey, DishState>，一道菜生成中不影响其他菜
 // 入库照搬 ChatView 模式：toDraft 剥离 id/createdAt/updatedAt、保 source='ai'，POST /api/recipes；
-// savedNames+savingNames 以 dishName 为键防抖（同名菜共用一份状态 → 天然满足同名菜防重复生成/防重复入库）
+// dishStates/savedNames/savingNames/在途请求注册表一律以「菜单内下标 + 菜名」（dishKey）为键——
+// 7 天菜单最多 21 道，AI 可能给出同名菜；若以菜名为键，点第一道会让第二道也变「已生成」而看不到其菜谱。
 // 错误处理：menu 失败 → 页面顶部错误条中文展示（502 文案自带服务端解析详情）；
 //           单菜生成失败 → 该菜卡内局部红字并回退 idle 允许重试，不阻塞其他菜
 import { useEffect, useRef, useState } from 'react'
@@ -18,6 +19,7 @@ import { MenuEpoch } from '@/lib/menu-epoch'
 // 上限与校验口径与服务端共用同一份定义（src/lib/menu-form.ts），避免两侧漂移
 import { MAX_DAYS, MAX_PEOPLE, MAX_TEXT_CHARS, validateMenuForm } from '@/lib/menu-form'
 import { DishAborts, buildRegenConfirmMessage, countUnsavedRecipes } from '@/lib/dishes-regen'
+import { dishKey } from '@/lib/dish-key'
 import type { Recipe } from '@/lib/recipe-types'
 
 // /api/ai/menu 契约：200 { dishes: {name,category,reason}[], shopping: {group,items[]}[] }（category 限五枚举，name/reason 必填）
@@ -93,20 +95,20 @@ export default function DishesPage() {
   const [menuError, setMenuError] = useState('')
   // 当前菜单（含生成时人数）；重新点菜整体覆盖并重置全部 per-dish 状态
   const [menu, setMenu] = useState<MenuData | null>(null)
-  // per-dish 状态：以菜名为键（同名菜共用一份生成状态 → 天然防同名菜重复调用）
+  // per-dish 状态：键为 dishKey(下标, 菜名)——同名菜各自独立，互不串状态
   const [dishStates, setDishStates] = useState<Record<string, DishState>>({})
-  // 入库防抖（照搬 ChatView 的 savedIds/savingIds，键改为 dishName）：
+  // 入库防抖（照搬 ChatView 的 savedIds/savingIds，键改为 dishKey）：
   // savedNames 已入库（按钮变「已入库」并禁用）；savingNames 请求往返期间禁用（防 201 前双击双入库）
   const [savedNames, setSavedNames] = useState<Record<string, boolean>>({})
   const [savingNames, setSavingNames] = useState<Record<string, boolean>>({})
   // 请求取消：点菜与逐菜生成各用一个槽——单槽会被后发起的请求覆盖，导致卸载时漏 abort
   // （更早的在途请求会继续跑完、继续烧 token）。
   // - menuAbortRef：点菜请求（同一时刻最多一个）
-  // - dishAbortsRef：逐菜生成请求（可多道并行），按菜名登记，支持「重新点菜时全部取消」
+  // - dishAbortsRef：逐菜生成请求（可多道并行），按 dishKey 登记，支持「重新点菜时全部取消」
   const menuAbortRef = useRef<AbortController | null>(null)
   const dishAbortsRef = useRef(new DishAborts())
   // 菜单代次（审查修复）：重新点菜后，上一份菜单里发起的「生成菜谱」请求若晚到，
-  // 会按菜名写回并显示上一个菜单的菜谱。用代次判断丢弃这类过期结果。
+  // 会按状态键写回并显示上一个菜单的菜谱。用代次判断丢弃这类过期结果。
   const menuEpochRef = useRef(new MenuEpoch())
   useEffect(() => {
     // DishAborts 实例在组件生命周期内恒定（不会被重新赋值），捕获后供 cleanup 使用
@@ -188,20 +190,21 @@ export default function DishesPage() {
   }
 
   // 第二段：单菜生成完整菜谱（per-dish 独立请求与状态，互不阻塞）
-  async function handleGenerate(name: string) {
+  // key = dishKey(下标, 菜名) 用作状态键与注册表键；name 仅用于发给 AI 的菜名与无障碍标签
+  async function handleGenerate(key: string, name: string) {
     if (!menu) return
     // 点菜进行中：旧菜单即将被替换，此时生成的菜谱注定被丢弃——不发请求（按钮也已禁用，此处兜底）
     if (menuLoading) return
-    const st = dishStates[name]
-    // 幂等兜底：该菜已在生成中或已就绪直接返回（按钮禁用为主，此判断防极端连点/同名菜重复调用）
+    const st = dishStates[key]
+    // 幂等兜底：该菜已在生成中或已就绪直接返回（按钮禁用为主，此判断防极端连点/同一道菜重复调用）
     if (st && (st.phase === 'generating' || st.phase === 'ready')) return
     // 记录发起时的菜单代次：返回时若用户已重新点菜（代次变化），结果作废不写回
     const requestEpoch = menuEpochRef.current.value
-    setDishStates((prev) => ({ ...prev, [name]: { phase: 'generating' } }))
+    setDishStates((prev) => ({ ...prev, [key]: { phase: 'generating' } }))
     // 控制器建在 try 外：catch 需要读 signal 区分「主动中止」与「网络异常」
     const controller = new AbortController()
-    // 按菜名登记在途请求：重新点菜时可一次性全部取消（不再只取消最后一个）
-    dishAbortsRef.current.set(name, controller)
+    // 按键登记在途请求：重新点菜时可一次性全部取消（不再只取消最后一个）
+    dishAbortsRef.current.set(key, controller)
     try {
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
@@ -216,14 +219,14 @@ export default function DishesPage() {
       if (res.ok) {
         // 注意：/api/ai/recipes 200 为 { recipe } 包裹形状（与 /api/recipes 入库接口的裸 Recipe 不同）
         const data = (await res.json()) as { recipe: Recipe }
-        setDishStates((prev) => ({ ...prev, [name]: { phase: 'ready', recipe: data.recipe } }))
+        setDishStates((prev) => ({ ...prev, [key]: { phase: 'ready', recipe: data.recipe } }))
         // 生成完成后把展开的菜谱卡片滚入视口：RecipeCard 在菜卡列表内，手机上常落在视口外，
         // 只见按钮变「已生成」而看不到内容；smooth 滚动避免生硬跳转。
         // 审计 #21：rAF 回调异步执行已脱离外层 try，选择器异常会变成未捕获错误——本处自行兜住
         requestAnimationFrame(() => {
           try {
             document
-              .querySelector(`li[aria-label="推荐菜：${CSS.escape(name)}"] section[aria-label^="菜谱："]`)
+              .querySelector(`li[data-dish-key="${CSS.escape(key)}"] section[aria-label^="菜谱："]`)
               ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
           } catch {
             // 滚动定位失败不影响主流程（卡片已渲染，用户滚动可见）
@@ -239,27 +242,27 @@ export default function DishesPage() {
       } catch {
         // 保留默认文案
       }
-      setDishStates((prev) => ({ ...prev, [name]: { phase: 'idle', error: msg } }))
+      setDishStates((prev) => ({ ...prev, [key]: { phase: 'idle', error: msg } }))
     } catch {
       // 卸载或「重新点菜」触发的 abort 不再 setState；其余网络异常回 idle 允许重试
       if (controller.signal.aborted) return
       // 菜单已被替换：过期请求的失败也无需提示（对应菜卡已随旧菜单一起消失）
       if (menuEpochRef.current.isStale(requestEpoch)) return
-      setDishStates((prev) => ({ ...prev, [name]: { phase: 'idle', error: '网络异常，请稍后重试' } }))
+      setDishStates((prev) => ({ ...prev, [key]: { phase: 'idle', error: '网络异常，请稍后重试' } }))
     } finally {
       // 请求结束（含中止）必注销登记，避免注册表无限增长；
       // 传 controller 做身份校验——旧请求的 finally 可能晚于「新菜单上同名菜的新请求」的登记
-      dishAbortsRef.current.delete(name, controller)
+      dishAbortsRef.current.delete(key, controller)
     }
   }
 
   // 入库：POST /api/recipes（契约 Task 4：201 裸 Recipe | 400 { error: 中文 }），逻辑与 ChatView.saveRecipe 同款
-  async function saveRecipe(name: string, recipe: Recipe) {
+  async function saveRecipe(key: string, recipe: Recipe) {
     // 防抖兜底：已入库或请求进行中直接返回（按钮禁用为主，此判断防极端连点）
-    if (savedNames[name] || savingNames[name]) return
+    if (savedNames[key] || savingNames[key]) return
     // 记录发起时的菜单代次：期间若重新点菜，201 返回后不应把「已入库」标到新菜单的同名菜上
     const requestEpoch = menuEpochRef.current.value
-    setSavingNames((prev) => ({ ...prev, [name]: true }))
+    setSavingNames((prev) => ({ ...prev, [key]: true }))
     try {
       const res = await apiFetch('/api/recipes', {
         method: 'POST',
@@ -268,7 +271,7 @@ export default function DishesPage() {
       })
       if (res.status === 201) {
         if (menuEpochRef.current.isStale(requestEpoch)) return
-        setSavedNames((prev) => ({ ...prev, [name]: true }))
+        setSavedNames((prev) => ({ ...prev, [key]: true }))
         return
       }
       // 失败：优先透出服务端中文 error
@@ -286,7 +289,7 @@ export default function DishesPage() {
       // 请求结束（无论成败）必移出 in-flight 集合；成功后由 savedNames 接管禁用
       setSavingNames((prev) => {
         const next = { ...prev }
-        delete next[name]
+        delete next[key]
         return next
       })
     }
@@ -394,11 +397,13 @@ export default function DishesPage() {
           </h2>
           <ul className="mb-4 flex flex-col gap-3">
             {menu.dishes.map((d, i) => {
-              // 该菜当前两段式状态（无记录视为 idle）；同名菜天然共用同一份状态
-              const st: DishState = dishStates[d.name] ?? { phase: 'idle' }
+              // 该菜当前两段式状态（无记录视为 idle）；键含下标，同名菜各自独立、互不串状态
+              const key = dishKey(i, d.name)
+              const st: DishState = dishStates[key] ?? { phase: 'idle' }
               return (
                 <li
-                  key={`${d.name}-${i}`}
+                  key={key}
+                  data-dish-key={key}
                   aria-label={`推荐菜：${d.name}`}
                   className="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
                 >
@@ -413,24 +418,24 @@ export default function DishesPage() {
                   <p className="min-w-0 break-words text-sm leading-6 text-neutral-600 dark:text-neutral-400">{d.reason}</p>
                   {/* 该菜生成失败的局部红字：仅本卡展示，不阻塞其他菜 */}
                   {st.error && <p className="text-sm text-red-500 dark:text-red-400">{st.error}</p>}
-                  {/* 生成菜谱按钮：generating/ready 均禁用（同名菜防重复触发）；
+                  {/* 生成菜谱按钮：generating/ready 均禁用（防同一道菜重复触发）；
                       点菜进行中同样禁用——旧菜单即将被替换，此时生成的菜谱注定被丢弃 */}
                   <button
                     type="button"
-                    onClick={() => void handleGenerate(d.name)}
+                    onClick={() => void handleGenerate(key, d.name)}
                     disabled={menuLoading || st.phase === 'generating' || st.phase === 'ready'}
                     aria-label={`生成菜谱：${d.name}`}
                     className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-white text-base font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-200 disabled:bg-neutral-100 disabled:text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-800 dark:disabled:bg-neutral-800 dark:disabled:text-neutral-500"
                   >
                     {st.phase === 'generating' ? '生成中…' : st.phase === 'ready' ? '已生成' : '生成菜谱'}
                   </button>
-                  {/* 第二段：就绪后卡下方展开完整菜谱卡片（含入库按钮，入库防抖以菜名为键） */}
+                  {/* 第二段：就绪后卡下方展开完整菜谱卡片（含入库按钮，入库防抖以 dishKey 为键） */}
                   {st.phase === 'ready' && st.recipe && (
                     <RecipeCard
                       recipe={st.recipe}
-                      onSave={() => void saveRecipe(d.name, st.recipe!)}
-                      saved={savedNames[d.name] ?? false}
-                      saving={savingNames[d.name] ?? false}
+                      onSave={() => void saveRecipe(key, st.recipe!)}
+                      saved={savedNames[key] ?? false}
+                      saving={savingNames[key] ?? false}
                     />
                   )}
                 </li>

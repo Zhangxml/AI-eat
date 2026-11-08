@@ -4,15 +4,15 @@ import { describe, expect, it } from 'vitest'
 import { DishAborts, buildRegenConfirmMessage, countUnsavedRecipes } from './dishes-regen'
 
 describe('DishAborts 在途请求注册表', () => {
-  it('登记后可查到菜名；delete 后移出', () => {
+  it('登记后可查到状态键；delete 后移出', () => {
     const reg = new DishAborts()
     reg.set('番茄炒蛋', new AbortController())
-    expect(reg.names()).toEqual(['番茄炒蛋'])
+    expect(reg.keys()).toEqual(['番茄炒蛋'])
     reg.delete('番茄炒蛋')
-    expect(reg.names()).toEqual([])
+    expect(reg.keys()).toEqual([])
   })
 
-  it('abortAll 取消全部在途请求并清空登记表，返回被取消的菜名', () => {
+  it('abortAll 取消全部在途请求并清空登记表，返回被取消的状态键', () => {
     const reg = new DishAborts()
     const a = new AbortController()
     const b = new AbortController()
@@ -24,21 +24,21 @@ describe('DishAborts 在途请求注册表', () => {
     expect(a.signal.aborted).toBe(true)
     expect(b.signal.aborted).toBe(true)
     expect(aborted.sort()).toEqual(['番茄炒蛋', '青椒肉丝'].sort())
-    expect(reg.names()).toEqual([])
+    expect(reg.keys()).toEqual([])
   })
 
-  it('delete 带实例校验时只注销自己，不误删后来登记的同名请求', () => {
+  it('delete 带实例校验时只注销自己，不误删后来登记的同一 key 新请求', () => {
     const reg = new DishAborts()
     const oldOne = new AbortController()
     const newOne = new AbortController()
     reg.set('番茄炒蛋', oldOne)
-    // 模拟：旧请求被中转取后，用户在新菜单上又对同名菜发起了新请求
+    // 模拟：旧请求被中止后，用户在新菜单上又对同一道菜（同 key）发起了新请求
     reg.set('番茄炒蛋', newOne)
     // 旧请求随后走到 finally，按实例注销
     reg.delete('番茄炒蛋', oldOne)
 
     // 新登记的请求必须还在（否则后续 abortAll/卸载会漏取消它）
-    expect(reg.names()).toEqual(['番茄炒蛋'])
+    expect(reg.keys()).toEqual(['番茄炒蛋'])
     expect(reg.abortAll()).toEqual(['番茄炒蛋'])
     expect(newOne.signal.aborted).toBe(true)
   })
@@ -48,7 +48,7 @@ describe('DishAborts 在途请求注册表', () => {
     const c = new AbortController()
     reg.set('番茄炒蛋', c)
     reg.delete('番茄炒蛋', c)
-    expect(reg.names()).toEqual([])
+    expect(reg.keys()).toEqual([])
   })
 
   it('abortAll 在空表上是 no-op（不抛错，返回空数组）', () => {

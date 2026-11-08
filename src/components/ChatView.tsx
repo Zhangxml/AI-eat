@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
+import { dishKey } from '@/lib/dish-key'
 import { readSse } from '@/lib/sse-client'
 import { buildHistory } from '@/lib/chat-history'
 import RecipeCard from '@/components/RecipeCard'
@@ -127,7 +128,7 @@ export default function ChatView() {
 
   // 推荐清单逐菜生成：确认某道菜后调 /api/ai/recipes 生成完整菜谱（per-dish 独立状态互不阻塞）
   async function generateDish(msgIdx: number, dishName: string) {
-    const key = `${msgIdx}:${dishName}`
+    const key = dishKey(msgIdx, dishName)
     const st = dishStates[key]
     // 守卫只拦「生成中」与「已就绪有菜谱」（防重复触发）；idle 或 ready-but-error（失败态）允许再次点击重试
     if (st && (st.phase === 'generating' || (st.phase === 'ready' && st.recipe))) return
@@ -296,7 +297,7 @@ export default function ChatView() {
                     </h3>
                     <ul className="flex flex-col gap-3">
                       {it.menu.dishes.map((d) => {
-                        const key = `${i}:${d.name}`
+                        const key = dishKey(i, d.name)
                         const st = dishStates[key]
                         return (
                           <li

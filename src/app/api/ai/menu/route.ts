@@ -28,14 +28,15 @@ const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
 const DISHES_PER_DAY = 3
 const MAX_DISHES = 21
 
-// 菜单项：轻量三字段（不含步骤/食材明细），category 限五枚举，name/reason 必填非空
-const dishSchema = z
-  .object({
-    name: z.string().min(1),
-    category: z.enum(['荤菜', '素菜', '汤', '主食', '其他']),
-    reason: z.string().min(1),
-  })
-  .strict()
+// 菜单项：轻量三字段（不含步骤/食材明细），category 限五枚举，name/reason 必填非空。
+// 不用 .strict()：模型偶尔自作主张加字段（difficulty/servings 等），zod 默认会剥离未知键，
+// 认得的三字段仍照常校验。若用 strict，一个多余键会让整份 7 天菜单作废并重试
+// （代价 35 秒 + 3.5k tokens），风险与收益不对称。缺必填字段仍会被拒（结构错误不放行）。
+const dishSchema = z.object({
+  name: z.string().min(1),
+  category: z.enum(['荤菜', '素菜', '汤', '主食', '其他']),
+  reason: z.string().min(1),
+})
 
 // 合并同名分组（模型偶尔把同一品类拆成多段）：保留首次出现顺序，items 顺序拼接。
 // 必要性：前端以 group 作为 React key，同名分组会产生重复 key（reconciliation 异常 + 控制台告警），
@@ -66,22 +67,18 @@ const shoppingSchema = z.union([
     .array(z.string())
     .transform(items => (items.length > 0 ? [{ group: '采购清单', items }] : [])),
   z
-    .array(z
-      .object({
-        group: z.string().min(1),
-        items: z.array(z.string()),
-      })
-      .strict())
+    .array(z.object({
+      group: z.string().min(1),
+      items: z.array(z.string()),
+    }))
     .transform(groups => mergeShoppingGroups(groups)),
 ])
 
 // 菜单整体：dishes 至少一道（推荐结果不允许为空），shopping 为分组采购清单
-const menuSchema = z
-  .object({
-    dishes: z.array(dishSchema).min(1),
-    shopping: shoppingSchema,
-  })
-  .strict()
+const menuSchema = z.object({
+  dishes: z.array(dishSchema).min(1),
+  shopping: shoppingSchema,
+})
 
 // 解析 AI 输出为合法菜单：extractJson 三形态均可解（<menu> 标签内的 JSON 由全文平衡扫描兜底命中），
 // JSON 非法或 zod 校验失败返回 null，不产生半成品

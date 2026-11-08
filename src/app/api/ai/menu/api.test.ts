@@ -237,6 +237,84 @@ describe('POST /api/ai/menu', () => {
     expect(body.shopping).toEqual(aiMenuGrouped.shopping)
   })
 
+  it('菜单/分组含多余字段时不整份作废，剥离未知键后正常返回（不浪费一次上游调用）', async () => {
+    // 模型偶尔会自作主张加字段（tips/note/purchased 等）。strict 会让整份 7 天菜单作废并重试，
+    // 代价是 35 秒 + 3.5k tokens；这里只要求「认得的值保留、多余键剥离」。
+    const noisy = {
+      tips: '买菜小贴士：周末人多，提前买肉',
+      dishes: [
+        { name: '番茄炒蛋', category: '荤菜', reason: '家常', difficulty: '简单' },
+        { name: '蒜蓉油麦菜', category: '素菜', reason: '清爽', servings: 3 },
+      ],
+      shopping: [
+        { group: '蔬菜', items: ['番茄 x2', '油麦菜 x1把'], note: '选叶子挺的' },
+        { group: '肉禽蛋', items: ['鸡蛋 x3'], budget: 20 },
+      ],
+    }
+    aiCompleteMock.mockResolvedValueOnce(`<menu>${JSON.stringify(noisy)}</menu>`)
+    const res = await POST(jsonReq({ people: 2, days: 7 }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as MenuResponse
+    expect(body.dishes.map(d => d.name)).toEqual(['番茄炒蛋', '蒜蓉油麦菜'])
+    expect(body.shopping).toEqual([
+      { group: '蔬菜', items: ['番茄 x2', '油麦菜 x1把'] },
+      { group: '肉禽蛋', items: ['鸡蛋 x3'] },
+    ])
+    // 多余键必须被剥离，而不是原样透传给前端（避免把模型噪声带进 UI 契约）
+    expect(Object.keys(body).sort()).toEqual(['dishes', 'shopping'])
+    for (const d of body.dishes) expect(Object.keys(d).sort()).toEqual(['category', 'name', 'reason'])
+    for (const g of body.shopping) expect(Object.keys(g).sort()).toEqual(['group', 'items'])
+    // 未触发重试：多余字段是「可容忍的噪声」，不该花第二次 AI 调用
+    expect(aiCompleteMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('结构/类型错误一律作废并重试（宽松仅针对多余键，不放过脏结构）', async () => {
+    // 逐个验证：这些都不该被「去掉 strict」放过
+    const broken: unknown[] = [
+      { dishes: [], shopping: [] },                                   // 空菜单
+      { dishes: [{ name: '番茄炒蛋', category: '甜点', reason: 'x' }], shopping: [] }, // 非法 category
+      { dishes: [{ name: 1, category: '荤菜', reason: 'x' }], shopping: [] },          // name 非字符串
+      { dishes: ['x'], shopping: [] },                                 // 元素不是对象
+      { dishes: [{ name: '番茄炒蛋', category: '荤菜', reason: 'x' }] },               // 缺 shopping
+      { dishes: [{ name: '番茄炒蛋', category: '荤菜', reason: 'x' }], shopping: [{ group: '', items: ['x'] }] }, // 空 group
+      { dishes: [{ name: '番茄炒蛋', category: '荤菜', reason: 'x' }], shopping: [{ group: '蔬菜', items: [1] }] }, // items 非字符串
+    ]
+    for (const bad of broken) {
+      aiCompleteMock.mockReset()
+      aiCompleteMock.mockResolvedValueOnce(`<menu>${JSON.stringify(bad)}</menu>`) // 首次失败
+      aiCompleteMock.mockResolvedValueOnce(aiOkGrouped)                            // 重试成功
+      const res = await POST(jsonReq({ people: 2 }))
+      const label = JSON.stringify(bad)
+      expect(aiCompleteMock.mock.calls.length, label).toBe(2)
+      expect(res.status, label).toBe(200)
+    }
+  })
+
+  it('纯空白 reason 被接受（既有行为：min(1) 不 trim）——锁定现状，改动须是有意为之', async () => {
+    // 这不是本次宽松化带来的：去 strict 之前 min(1) 同样不 trim。
+    // 记录在此，避免将来有人误以为「去掉 strict 导致脏数据入结构」。
+    const blankReason = {
+      dishes: [{ name: '番茄炒蛋', category: '荤菜', reason: '   ' }],
+      shopping: [],
+    }
+    aiCompleteMock.mockResolvedValueOnce(`<menu>${JSON.stringify(blankReason)}</menu>`)
+    const res = await POST(jsonReq({ people: 2 }))
+    expect(res.status).toBe(200)
+    expect(aiCompleteMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('菜品缺必填字段时仍然整份作废（宽松只针对多余键，不放过结构错误）', async () => {
+    const broken = {
+      dishes: [{ name: '番茄炒蛋', category: '荤菜' }], // 缺 reason
+      shopping: [{ group: '蔬菜', items: ['番茄 x2'] }],
+    }
+    aiCompleteMock.mockResolvedValueOnce(`<menu>${JSON.stringify(broken)}</menu>`) // 首次失败
+    aiCompleteMock.mockResolvedValueOnce(aiOkGrouped) // 重试成功
+    const res = await POST(jsonReq({ people: 2 }))
+    expect(res.status).toBe(200)
+    expect(aiCompleteMock).toHaveBeenCalledTimes(2)
+  })
+
   it('同名分组自动合并（避免前端重复 key 与同一品类分散多处）', async () => {
     const dup = {
       dishes: [{ name: '番茄炒蛋', category: '荤菜', reason: '家常' }],

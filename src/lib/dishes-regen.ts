@@ -2,15 +2,15 @@
 // 背景（无头浏览器实测复现）：旧菜单在「点菜中」仍可点「生成菜谱」，新菜单落地时
 // setDishStates({}) 会静默丢掉用户已等出的菜谱；且单槽 abortRef 只能取消最后一个请求，
 // 更早的在途请求会跑完并写回（注册表修掉这一漏取消）。本模块提供两块纯逻辑，UI 层只负责调用：
-// 1) DishAborts：按菜名登记在途生成请求的 AbortController，支持「全部取消」
+// 1) DishAborts：按逐菜状态键（dishKey）登记在途生成请求的 AbortController，支持「全部取消」
 // 2) countUnsavedRecipes / buildRegenConfirmMessage：清空前告知用户会丢几道已生成的菜谱
 // 无 React、无 IO，便于单测。
 
-/** 在途逐菜生成请求的注册表：键为菜名（同名菜共用一份状态，故天然一对一） */
+/** 在途逐菜生成请求的注册表：键为逐菜状态键 dishKey(下标, 菜名)，与页面状态键保持一致 */
 export class DishAborts {
   private controllers = new Map<string, AbortController>()
 
-  /** 登记某道菜的在途请求（同名菜重复登记时旧引用被覆盖——旧请求已由按钮禁用挡住） */
+  /** 登记某道菜的在途请求（同一 key 重复登记时旧引用被覆盖——旧请求已由按钮禁用挡住） */
   set(name: string, controller: AbortController): void {
     this.controllers.set(name, controller)
   }
@@ -18,7 +18,7 @@ export class DishAborts {
   /**
    * 请求结束（成功/失败/中止）后移出登记表。
    * 传 controller 时做身份校验：只注销「自己那一次」的登记。
-   * 必要性：旧请求的 finally 可能在「新菜单上对同名菜发起的新请求」登记之后才执行，
+   * 必要性：旧请求的 finally 可能在「新菜单上同一道菜（同 key）发起的新请求」登记之后才执行，
    * 无条件 delete 会把新请求的引用删掉，导致后续 abortAll / 卸载漏取消它。
    */
   delete(name: string, controller?: AbortController): void {
@@ -26,22 +26,22 @@ export class DishAborts {
     this.controllers.delete(name)
   }
 
-  /** 当前在途的菜名（测试与调试用） */
-  names(): string[] {
+  /** 当前在途的状态键（测试与调试用） */
+  keys(): string[] {
     return [...this.controllers.keys()]
   }
 
   /**
-   * 取消全部在途生成，返回被取消的菜名列表。
+   * 取消全部在途生成，返回被取消的状态键列表。
    * 返回列表让 UI 能把对应的「生成中…」复位成可重试，避免永远转圈。
    */
   abortAll(): string[] {
-    const names = [...this.controllers.keys()]
+    const keys = [...this.controllers.keys()]
     for (const c of this.controllers.values()) {
       c.abort()
     }
     this.controllers.clear()
-    return names
+    return keys
   }
 }
 
