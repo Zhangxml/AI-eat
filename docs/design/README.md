@@ -36,7 +36,9 @@
 | 变量 | 作用 | 缺省行为 |
 | --- | --- | --- |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | AI 供应商（OpenAI 兼容） | 三项齐备才启用 AI 功能，缺省仅本地功能 |
+| `AI_TEMP_CHAT` / `AI_TEMP_MENU` / `AI_TEMP_RECIPE` / `AI_TEMP_NUTRITION` | AI 温度分层覆盖 | 0.7 / 0.8 / 0.7 / 0.5；非法值回落并 clamp 到 0~1 |
 | `PASSWORD` | 登录口令（非空即启用） | 未设=免登录（局域网信任边界） |
 | `DELETE_ENABLED` + `DELETE_PASSWORD` | 删除保护开关+密码 | 未设=删除仅浏览器确认 |
+| `TRUST_PROXY` | 反代可信时读 `x-forwarded-for` 取真实 IP | 未设=不信任该头，取 socket 地址 |
 | `PORT` | 裸机监听端口 | 8888 |
 | `AI_EAT_DATA_DIR` | 菜谱数据目录 | `<项目>/data/recipes`（Docker 内 `/app/data/recipes`） |

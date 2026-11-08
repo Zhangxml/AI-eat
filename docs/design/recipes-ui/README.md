@@ -23,7 +23,7 @@ RecipeForm({ initial?: Recipe; onSubmit: (draft) => Promise<Response>; submitLab
 
 - 受控表单：食材/步骤为行数组 state（增删行），提交时 `buildDraft()` 组装并做行级校验（整行空白丢弃、半填行拦截、营养四项整体填写/整体置空）
 - **AI 整份生成**：名称旁「AI 生成」按钮（名称空则禁用）→ `POST /api/ai/recipes { dish }` → 成功后整份回填所有字段（标签以中文逗号连接匹配回显格式、营养四项转字符串）→ **不自动保存**（source 仍 manual），用户核对后自行提交。回填后 AI 可再改，人工始终兜底
-- **AI 估算营养**：营养区独立按钮（需名称+食材）→ `POST /api/ai/nutrition`（温度 0.5，只返回四项营养）→ 回填；不再为拿营养生成整份菜谱
+- **AI 估算营养**：营养区独立按钮（需名称+食材）→ `POST /api/ai/nutrition`（温度 0.5，只返回四项营养）→ 回填；不再为拿营养生成整份菜谱。营养四项在共享 schema 中带 `min(0)` 约束，负值会被拒绝（接口重试后仍失败返回 502，不会回填到表单）
 - 编辑模式：`initial` 传入即回显，`source` 沿用原值；组件无路由感知（页面注入 onSubmit 决定 POST 还是 PUT）
 
 ### 关键契约与坑（实现时踩过的）

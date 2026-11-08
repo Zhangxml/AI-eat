@@ -1,13 +1,18 @@
 // AI 提示词组装与结构化输出解析（Task 9，设计 5.2/5.3）
-// 被 T10/T11/T13 三个 AI 接口消费：
+// 被四个 AI 接口消费：/api/ai/recipes、/api/ai/chat、/api/ai/menu、/api/ai/nutrition
 // - systemPromptWithLibrary：中文人设 + 库摘要注入（仅防完全重复，不设已有菜优先级）
-// - RECIPE_FORMAT_RULE：结构化输出格式约束（<recipe>{完整JSON}</recipe>），内嵌 5.3 番茄炒蛋示例
+// - RECIPE_FORMAT_RULE：菜谱结构化输出约束（<recipe>{完整JSON}</recipe>），内嵌 5.3 番茄炒蛋示例
+// - CHAT_MENU_FORMAT_RULE：聊天内推荐清单约束（<menu>，含「继续」去重语义）
+// - NUTRITION_FORMAT_RULE：营养估算约束（<nutrition>，温度 0.5 专用）
 // - extractJson：平衡花括号扫描取首个完整 {...} 段（不用正则贪婪匹配——嵌套对象会出错）
-// - extractRecipeJson：extractJson + validateRecipe，三形态（标签/栅栏/裸 JSON）均可解
+// - extractRecipeJson：extractJson + validateRecipe（仅 /api/ai/recipes 与 /api/ai/chat 使用；
+//   menu 走自己的 menuSchema，nutrition 走 nutritionSchema）
+// - extractChatMenuJson：<menu> 标签提取 + 清单 schema 校验
 import type { Recipe } from './recipe-types'
 import { validateRecipe } from './recipe-types'
 
-// extractRecipeJson = extractJson + validateRecipe：T10/T11/T13 的统一出口。
+// extractRecipeJson = extractJson + validateRecipe：/api/ai/recipes 与 /api/ai/chat 的统一出口
+// （menu 走自己的 menuSchema、nutrition 走 nutritionSchema，都不经过这里）。
 // 三形态均可解（<recipe> 标签包裹、markdown 代码栅栏包裹、前后杂文本裸 JSON）。
 // 内部完成 JSON.parse（平衡扫描得到的是文本段）→ validateRecipe 完整 schema 校验；
 // 文本段非法 JSON 或校验失败（字段缺失/类型错/多余字段）均返回 null，不产生半成品对象。
