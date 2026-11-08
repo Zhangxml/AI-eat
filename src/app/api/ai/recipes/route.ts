@@ -88,6 +88,9 @@ function buildUserMessage(input: {
   }
   if (input.dish) {
     parts.push(`我想做：${input.dish}`)
+    // 指定菜名时锁死菜名：创意档人设含「避免大路菜/有新意」，曾实测把「番茄炒蛋」改写成
+    // 「番茄炒蛋（滑蛋版）」——买什么里用户点的菜与入库菜名对不上，必须显式约束
+    parts.push(`请严格按「${input.dish}」这个菜名生成，菜名不得改写、加后缀（如「XX版」/「XX风味」）或替换成其他菜`)
   }
   parts.push(input.servings ? `份数：${input.servings} 人份` : '份数：默认 2 人份')
   return parts.join('；') + '。'

@@ -115,6 +115,28 @@ describe('POST /api/ai/recipes', () => {
     expect(sysMsg.content).not.toContain('优先经典家常做法')
   })
 
+  it('指定菜名时用户消息含「严格按该菜名」约束（creative 档也不得改名/加后缀）', async () => {
+    listRecipesMock.mockResolvedValue({ recipes: [], invalidFiles: [] })
+    aiCompleteMock.mockResolvedValueOnce(aiOk)
+    await POST(jsonReq({ dish: '番茄炒蛋', servings: 2 }))
+    const [, userMsg] = aiCompleteMock.mock.calls[0][1]
+    expect(userMsg.content).toContain('我想做：番茄炒蛋')
+    // 创意档人设含「避免大路菜」，若不显式约束，模型会把指定菜改成「番茄炒蛋（滑蛋版）」
+    expect(userMsg.content).toContain('番茄炒蛋')
+    expect(userMsg.content).toContain('不得改写')
+    // 指定菜名时不注入灵感种子（避免把菜带跑）
+    expect(userMsg.content).not.toContain('本次灵感方向')
+  })
+
+  it('仅给食材（无菜名）时不做菜名约束，仍注入灵感种子', async () => {
+    listRecipesMock.mockResolvedValue({ recipes: [], invalidFiles: [] })
+    aiCompleteMock.mockResolvedValueOnce(aiOk)
+    await POST(jsonReq({ ingredients: ['番茄', '鸡蛋'], servings: 2 }))
+    const [, userMsg] = aiCompleteMock.mock.calls[0][1]
+    expect(userMsg.content).not.toContain('不得改写')
+    expect(userMsg.content).toContain('本次灵感方向')
+  })
+
   it('按食材生成并解析成功：source=ai，id/时间戳被无条件覆写（AI 照抄示例 id 也被替换）', async () => {
     listRecipesMock.mockResolvedValue({ recipes: [{ ...aiRecipe }], invalidFiles: [] })
     aiCompleteMock.mockResolvedValueOnce(aiOk)

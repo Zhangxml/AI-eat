@@ -153,7 +153,8 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
-  // 系统消息 = 人设 + 库摘要 + <menu> 格式规则；用户消息 = 人数/偏好/搭配/已有菜优先拼装；
+  // 系统消息 = 人设（含档位）+ 库摘要 + <menu> 格式规则；用户消息 = 人数/偏好/荤素搭配/档位约束/灵感；
+  // （「菜谱库已有菜优先」要求已按产品决定移除，库摘要仅用于避免完全重复）
   // 菜谱库读取失败（权限等）→ 500 中文（审计修复 #8）
   let recipes: Recipe[]
   try {
