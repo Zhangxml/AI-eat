@@ -27,14 +27,20 @@ function parseSetCookie(header: string): { value: string; attrs: string[] } {
 
 describe('/api/auth', () => {
   let envSnapshot: NodeJS.ProcessEnv
+  let dir: string
 
-  beforeEach(() => {
+  // 测试隔离（审查 Critical）：/api/auth 每次调用都会 appendAccessLog 写 data/logs/access.jsonl。
+  // 不隔离 AI_EAT_DATA_DIR 时，跑测试会向真实审计日志写入假记录，并在容量满时滚动丢弃真实记录。
+  beforeEach(async () => {
     envSnapshot = { ...process.env }
+    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-auth-api-')
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes`
     process.env.PASSWORD = 'p'
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     process.env = envSnapshot
+    await fs.rm(dir, { recursive: true, force: true })
   })
 
   it('正确密码 → 200 且 Set-Cookie 含 HttpOnly/Path=/ /SameSite=Lax/Max-Age=2592000，token 可验', async () => {

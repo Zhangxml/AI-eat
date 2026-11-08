@@ -53,7 +53,7 @@ describe('备份接口 /api/backup', () => {
 
   beforeEach(async () => {
     dir = await fs.mkdtemp('/tmp/opencode/ai-eat-backup-')
-    process.env.AI_EAT_DATA_DIR = dir
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
   })
 
   afterEach(async () => {

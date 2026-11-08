@@ -93,7 +93,7 @@ describe('POST /api/ai/menu', () => {
     delete process.env.AI_TEMP_RECIPE
     delete process.env.AI_TEMP_NUTRITION
     dir = await fs.mkdtemp('/tmp/opencode/ai-eat-menu-api-')
-    process.env.AI_EAT_DATA_DIR = dir
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
     // AI 配置默认给全（真实 loadAiConfig 可通过）；503 用例里再清空
     process.env.AI_BASE_URL = 'https://api.example.com'
     process.env.AI_API_KEY = 'sk-test'

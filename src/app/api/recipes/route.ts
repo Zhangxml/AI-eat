@@ -43,18 +43,29 @@ export async function GET(req: Request) {
   return Response.json({ recipes: filtered, invalidFiles: jsonInvalidFiles })
 }
 
-// POST /api/recipes（body: DraftRecipe）→ 201 Recipe | 400 { error } | 413 { error }（超 1MB）
+// POST /api/recipes（body: DraftRecipe）→ 201 Recipe | 400 { error } | 413 | 500 { error }
 export async function POST(req: Request) {
   const denied = requireAuth(req)
   if (denied) return denied
   // body 体积前置闸门（审计修复 #4）：content-length 超 1MB 直接 413，不进解析
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
+  if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
+    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/recipes', status: 413 })
+    return bodyTooLarge()
+  }
+  const ip = clientIpOf(req)
   const draft = await parseDraft(req)
-  // 访问日志（方案 A：写操作记录；路径不含查询串）。await 但失败已被 access-log 内部吞掉，不影响主流程
-  await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/recipes', status: draft ? 201 : 400 })
   if (!draft) {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/recipes', status: 400 })
     return Response.json({ error: '请求体不是合法的菜谱草稿' }, { status: 400 })
   }
-  const recipe = await createRecipe(draft)
-  return Response.json(recipe, { status: 201 })
+  // 写盘可能因磁盘满/权限失败（审查修复）：捕获后返回 500 中文错误，
+  // 审计按真实结果记录（此前先记 201，写失败也留了一条假的成功记录）
+  try {
+    const recipe = await createRecipe(draft)
+    await appendAccessLog({ ip, method: 'POST', path: '/api/recipes', status: 201 })
+    return Response.json(recipe, { status: 201 })
+  } catch {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/recipes', status: 500 })
+    return Response.json({ error: '保存失败：请检查服务器 data 目录权限与磁盘空间' }, { status: 500 })
+  }
 }

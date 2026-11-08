@@ -4,13 +4,14 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 
 // 营养信息：estimated 恒为字面量 true（AI 估算，非实测）；
-// 四项均不小于 0——营养值不可能为负，拒绝负值可避免 AI 异常输出污染表单回填与入库
+// 四项均须为不小于 0 的**有限**数值——负数无意义，Infinity 会被 JSON.stringify 写成 null，
+// 导致该文件之后永久通不过校验（审查修复）
 export const nutritionSchema = z
   .object({
-    caloriesKcal: z.number().min(0),
-    proteinG: z.number().min(0),
-    fatG: z.number().min(0),
-    carbG: z.number().min(0),
+    caloriesKcal: z.number().finite().min(0),
+    proteinG: z.number().finite().min(0),
+    fatG: z.number().finite().min(0),
+    carbG: z.number().finite().min(0),
     estimated: z.literal(true),
   })
   .strict()

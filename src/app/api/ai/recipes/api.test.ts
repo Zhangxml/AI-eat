@@ -86,7 +86,7 @@ describe('POST /api/ai/recipes', () => {
     delete process.env.AI_TEMP_RECIPE
     delete process.env.AI_TEMP_NUTRITION
     dir = await fs.mkdtemp('/tmp/opencode/ai-eat-ai-api-')
-    process.env.AI_EAT_DATA_DIR = dir
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
     // AI 配置默认给全（真实 loadAiConfig 可通过）；503 用例里再清空
     process.env.AI_BASE_URL = 'https://api.example.com'
     process.env.AI_API_KEY = 'sk-test'
@@ -121,7 +121,8 @@ describe('POST /api/ai/recipes', () => {
     expect(Number.isNaN(Date.parse(recipe.createdAt))).toBe(false)
     // 不写盘：目录仍为空
     expect(createRecipeMock).not.toHaveBeenCalled()
-    expect(await fs.readdir(dir)).toEqual([])
+    // 不写盘：菜谱目录应不存在或为空（日志在 ${dir}/logs，不在此断言范围）
+    expect(await fs.readdir(`${dir}/recipes`).catch(() => [])).toEqual([])
     // 系统消息 = 人设（含库摘要）+ 格式规则；用户消息含食材与份数
     const [sysMsg, userMsg] = aiCompleteMock.mock.calls[0][1]
     expect(sysMsg.role).toBe('system')
@@ -158,7 +159,8 @@ describe('POST /api/ai/recipes', () => {
     expect(((await res.json()) as ErrorResponse).error).toMatch(/两次均无法解析/)
     expect(aiCompleteMock).toHaveBeenCalledTimes(2)
     expect(createRecipeMock).not.toHaveBeenCalled()
-    expect(await fs.readdir(dir)).toEqual([])
+    // 不写盘：菜谱目录应不存在或为空（日志在 ${dir}/logs，不在此断言范围）
+    expect(await fs.readdir(`${dir}/recipes`).catch(() => [])).toEqual([])
   })
 
   it('上游异常两次也按 502 处理且带上游错误详情', async () => {

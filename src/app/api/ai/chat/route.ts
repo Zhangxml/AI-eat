@@ -386,7 +386,14 @@ export async function POST(req: Request): Promise<Response> {
           }
           emit(sseEvent('done', {}))
         }
-        controller.close()
+        // 客户端断开时下游流已取消，close() 会抛 "Controller is already closed"；
+        // 必须在这里吞掉，否则会落入下方 catch 被误记为「上游中断 502」
+        // （此前每次关页面/切页都会产生一条假的 502 审计记录）
+        try {
+          controller.close()
+        } catch {
+          // 已关闭/已取消则忽略
+        }
       } catch (e) {
         // 上游中途读失败：流已开始无法改状态码，补 error + done 保证前端总能收到终止帧
         if (!clientGone) {
@@ -396,9 +403,9 @@ export async function POST(req: Request): Promise<Response> {
             }),
           )
           emit(sseEvent('done', {}))
+          // 访问日志（审计 #26）：仅真实上游中断记 502；客户端主动关闭不记
+          await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 502 })
         }
-        // 访问日志（审计 #26）：上游中断也记一条 502——否则「流开始后失败」的调用完全逃过审计
-        await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 502 })
         try {
           controller.close()
         } catch {

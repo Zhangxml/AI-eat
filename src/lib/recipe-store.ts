@@ -111,14 +111,17 @@ export async function updateRecipe(
   return recipe
 }
 
-// 删除：成功返回 true；文件不存在或非法 id 返回 false
+// 删除：成功返回 true；文件不存在或非法 id 返回 false；
+// 其余 IO 故障（EACCES/EIO 等）抛出，由路由映射 500——与 listRecipes 的 ENOENT 分级保持一致
+// （此前一律返回 false 会被误报成「菜谱不存在」）
 export async function deleteRecipe(id: string, dir: string = recipesDir()): Promise<boolean> {
   if (!isSafeId(id)) return false
   try {
     await fs.unlink(path.join(dir, `${id}.json`))
     return true
-  } catch {
-    return false
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw e
   }
 }
 

@@ -30,26 +30,35 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   return Response.json(recipe)
 }
 
-// PUT /api/recipes/:id（body: DraftRecipe）→ 200 Recipe | 400 { error } | 404 { error } | 413（超 1MB）
+// PUT /api/recipes/:id（body: DraftRecipe）→ 200 Recipe | 400 | 404 | 413 | 500
 export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const denied = requireAuth(req)
   if (denied) return denied
   const { id } = await ctx.params
+  const ip = clientIpOf(req)
   // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
+  if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
+    await appendAccessLog({ ip, method: 'PUT', path: `/api/recipes/${id}`, status: 413 })
+    return bodyTooLarge()
+  }
   const draft = await parseDraft(req)
   if (!draft) {
     // 访问日志（方案 A：写操作；400 也如实记录）
-    await appendAccessLog({ ip: clientIpOf(req), method: 'PUT', path: `/api/recipes/${id}`, status: 400 })
+    await appendAccessLog({ ip, method: 'PUT', path: `/api/recipes/${id}`, status: 400 })
     return Response.json({ error: '请求体不是合法的菜谱草稿' }, { status: 400 })
   }
-  const recipe = await updateRecipe(id, draft)
-  // 访问日志：200 更新成功 / 404 菜谱不存在
-  await appendAccessLog({ ip: clientIpOf(req), method: 'PUT', path: `/api/recipes/${id}`, status: recipe ? 200 : 404 })
-  if (!recipe) {
-    return Response.json({ error: '菜谱不存在' }, { status: 404 })
+  // 写盘失败（权限/磁盘）→ 500 中文错误，审计按真实结果记录（此前该路径完全无审计）
+  try {
+    const recipe = await updateRecipe(id, draft)
+    await appendAccessLog({ ip, method: 'PUT', path: `/api/recipes/${id}`, status: recipe ? 200 : 404 })
+    if (!recipe) {
+      return Response.json({ error: '菜谱不存在' }, { status: 404 })
+    }
+    return Response.json(recipe)
+  } catch {
+    await appendAccessLog({ ip, method: 'PUT', path: `/api/recipes/${id}`, status: 500 })
+    return Response.json({ error: '保存失败：请检查服务器 data 目录权限与磁盘空间' }, { status: 500 })
   }
-  return Response.json(recipe)
 }
 
 // DELETE /api/recipes/:id → 204 无 body | 403 { error }（删除密码校验失败）| 404 { error }
@@ -93,11 +102,17 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     }
   }
   const { id } = await ctx.params
-  const deleted = await deleteRecipe(id)
-  // 访问日志：路径带真实 id（删除的是哪道菜可追溯）；403 的路径不带 id（密码还没验过，id 不可信）
-  await appendAccessLog({ ip, method: 'DELETE', path: `/api/recipes/${id}`, status: deleted ? 204 : 404 })
-  if (!deleted) {
-    return Response.json({ error: '菜谱不存在' }, { status: 404 })
+  // 删除失败（权限/IO）→ 500 中文错误；ENOENT 已由 store 返回 false（→404）
+  try {
+    const deleted = await deleteRecipe(id)
+    // 访问日志：路径带真实 id（删除的是哪道菜可追溯）；403 的路径不带 id（密码还没验过，id 不可信）
+    await appendAccessLog({ ip, method: 'DELETE', path: `/api/recipes/${id}`, status: deleted ? 204 : 404 })
+    if (!deleted) {
+      return Response.json({ error: '菜谱不存在' }, { status: 404 })
+    }
+    return new Response(null, { status: 204 })
+  } catch {
+    await appendAccessLog({ ip, method: 'DELETE', path: `/api/recipes/${id}`, status: 500 })
+    return Response.json({ error: '删除失败：请检查服务器 data 目录权限' }, { status: 500 })
   }
-  return new Response(null, { status: 204 })
 }

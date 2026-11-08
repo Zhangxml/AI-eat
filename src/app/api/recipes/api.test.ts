@@ -27,7 +27,7 @@ describe('菜谱库 REST API', () => {
 
   beforeEach(async () => {
     dir = await fs.mkdtemp('/tmp/opencode/ai-eat-api-')
-    process.env.AI_EAT_DATA_DIR = dir
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
   })
 
   afterEach(async () => {
@@ -107,8 +107,9 @@ describe('菜谱库 REST API', () => {
   it('invalidFiles 只保留 .json 条目（route 层过滤 Task 3 的宽语义）', async () => {
     await createR(json(goodDraft))
     // 模拟 Task 3 裁定的宽语义：非法 JSON 与非 .json 文件都会进 store 的 invalidFiles
-    await fs.writeFile(`${dir}/broken.json`, '{oops', 'utf8')
-    await fs.writeFile(`${dir}/notes.txt`, 'hello', 'utf8')
+    // （数据目录已指向 <tmp>/recipes，故写入该子目录）
+    await fs.writeFile(`${dir}/recipes/broken.json`, '{oops', 'utf8')
+    await fs.writeFile(`${dir}/recipes/notes.txt`, 'hello', 'utf8')
     const list = await (await listR(new Request('http://x/api/recipes'))).json()
     expect(list.recipes).toHaveLength(1)
     expect(list.invalidFiles).toEqual(['broken.json'])
@@ -183,7 +184,7 @@ describe('菜谱库 REST API', () => {
       expect(res.status).toBe(500)
       expect(((await res.json()) as { error: string }).error).toContain('菜谱库读取失败')
     } finally {
-      process.env.AI_EAT_DATA_DIR = dir
+      process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
     }
   })
 
@@ -197,5 +198,27 @@ describe('菜谱库 REST API', () => {
     )
     expect(res.status).toBe(413)
     expect(((await res.json()) as { error: string }).error).toBe('请求体过大')
+  })
+
+  // 审查 Important：store 写失败（磁盘满/权限）此前会冒泡成 Next 默认 500，且 POST 已先记了 201 审计
+  it('写入失败（目录只读）→ 500 中文错误，且审计记 500 而非 201', async () => {
+    // 把数据目录设为只读，模拟 EACCES/ENOSPC 类故障
+    await fs.chmod(dir, 0o555)
+    try {
+      const res = await createR(json(goodDraft))
+      expect(res.status).toBe(500)
+      expect(((await res.json()) as { error: string }).error).toMatch(/保存失败|服务器/)
+      const logFile = path.join(dir, 'logs', 'access.jsonl')
+      let auditLines: string[] = []
+      try {
+        auditLines = (await fs.readFile(logFile, 'utf8')).split('\n').filter(Boolean)
+      } catch {
+        /* 日志目录同样在只读目录下，未创建属正常 */
+      }
+      const statuses = auditLines.map((l) => (JSON.parse(l) as { status: number }).status)
+      expect(statuses).not.toContain(201)
+    } finally {
+      await fs.chmod(dir, 0o755)
+    }
   })
 })
