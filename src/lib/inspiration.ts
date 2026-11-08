@@ -3,6 +3,7 @@
 // - creative：中式地方风味与特色技法，用户想换口味时用（**按需求已移除异国风味**）
 // 纯函数 + 可注入随机源（与 makeRecipeId(now)/issueToken(now)/resolveTemperature(env) 的测试惯例一致）。
 // 注意：仅用于「推荐/搭配」场景；用户明确指定菜名时必须严格遵照菜名（调用方在提示词措辞上约束）。
+import type { RecommendationStyle } from './settings'
 
 // 家常技法：家里灶台常做的
 const HOME_TECHNIQUES = ['小炒', '炖煮', '清蒸', '凉拌', '红烧', '焖', '煎', '汆烫'] as const
@@ -16,7 +17,9 @@ const HOME_STYLES = ['下饭', '清淡', '汤水足', '面食', '快手', '家�
 // 创意风味：中式地方风味（异国风味已按需求移除）
 const CREATIVE_STYLES = ['川味', '粤式', '湘味', '江浙', '西北', '东北'] as const
 
-export type InspirationStyle = 'home' | 'creative'
+// 档位类型唯一事实来源在 settings.ts（STYLE_VALUES）；用 import type 零运行时依赖，
+// 避免此处与设置层各写一份枚举、加档位时只改一处漏改另一处
+export type InspirationStyle = RecommendationStyle
 
 // 按档位取池子（结构化导出便于测试断言词池内容）
 export const INSPIRATION_TECHNIQUES: Record<InspirationStyle, readonly string[]> = {

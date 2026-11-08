@@ -34,9 +34,34 @@ GET/PATCH /api/settings   ← 鉴权 + 体积闸门 + strict 校验 + 访问日�
 { "version": 1, "style": "home" }
 ```
 
-- `version`：当前恒为 1，为未来字段改名/结构迁移留口
+- `version`：当前恒为 1，为未来字段改名/结构迁移留口；**读取时恒由服务端覆写为当前版本**（不采信文件里的值）
 - `style`：`home`（经典家常，默认）| `creative`（中式创意换口味）
-- 缺字段/非法值/文件损坏/文件不存在 → 一律回落默认 `{ version: 1, style: 'home' }`，**绝不崩**（设置坏了不能把整个应用带下去）
+
+### 读取宽松、写入严格（Postel 原则）
+
+这是为「后续还会加设置项」预留的关键设计。若读取时要求文件**完全合法**（字段齐全、无多余键），
+那么以后一旦新增字段，老用户的文件必然缺字段 → 整体校验失败 → **已调好的设置被静默重置为默认**。
+
+因此两侧口径不同：
+
+| 环节 | 口径 | 行为 |
+| --- | --- | --- |
+| 读取文件 `parseSettingsFile` | **宽松** | 缺字段 / 未知键 / 未来版本多写的字段 → 忽略，**认得的值全部保留**；字段值非法 → 该字段回落默认；非对象/数组 → 全默认 |
+| PATCH 请求体 `validateSettingsPatch` | **严格**（strict） | 未知键 400（防拼写错误被静默吞掉）、非法值 400 |
+| 写入前 `writeSettings` | **严格**（schema.parse） | 兜住「未来代码传非法值」的内部 bug，坏数据不落盘 |
+
+实测（`parseSettingsFile` 输入 → 结果）：
+
+```
+{version:1, style:'creative'}                → style=creative   正常
+{style:'creative'}                           → style=creative   缺 version 仍保留
+{version:2, style:'creative', servings:4}    → style=creative   未来版本多字段仍保留
+{version:1, style:'creative', foo:'bar'}     → style=creative   垃圾键忽略
+{version:1, style:'exotic'}                  → style=home       非法值才回落
+null / [1,2] / 'oops'                        → style=home       非对象全默认
+```
+
+文件损坏（JSON 解析失败）或不存在 → 默认 `{ version: 1, style: 'home' }`，**绝不崩**（设置坏了不能把整个应用带下去）。
 
 ## API 契约
 
@@ -69,11 +94,11 @@ GET/PATCH /api/settings   ← 鉴权 + 体积闸门 + strict 校验 + 访问日�
 | 两台设备同时改 | 后写覆盖（单人自用可接受） |
 | 未启用 PASSWORD | 守卫放行，零摩擦 |
 | Docker 部署 | `data/` 已挂卷，无额外配置 |
-| 备份 | 目录直备天然包含；页面导出/导入仍只导菜谱（不扩大备份契约） |
+| 备份 | 目录直备天然包含 `settings.json`；页面导出/导入仍**只导菜谱**（不扩大备份契约，换机时设置需重设） |
 
 ## 加一项新设置要改哪里
 
-1. `src/lib/settings.ts`：schema 加字段 + 默认值 + `mergeSettings` 合流
+1. `src/lib/settings.ts`：schema 加字段 + 默认值 + `mergeSettings` 合流 + **`parseSettingsFile` 补该字段的宽松解析**（漏了这步，老文件里的新字段永远读不到）
 2. `src/lib/settings-store.ts`：通常不用改（整对象读写）
 3. `src/app/api/settings/route.ts`：错误文案里的字段清单
 4. 设置页：加一组 UI（`changeStyle` 同款乐观更新 + 失败回滚）

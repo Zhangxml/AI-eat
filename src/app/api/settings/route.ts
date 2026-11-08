@@ -12,7 +12,8 @@ import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 export async function GET(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
-  return Response.json(await readSettings())
+  // 用户偏好可随时在设置页修改：显式禁止缓存，避免改完读到旧值
+  return Response.json(await readSettings(), { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function PATCH(req: Request): Promise<Response> {

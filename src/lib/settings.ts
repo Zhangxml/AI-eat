@@ -43,10 +43,21 @@ export function mergeSettings(base: Settings, patch: SettingsPatch): Settings {
   return next
 }
 
-// 校验任意对象为完整设置（读取文件时用）；失败返回 null
-export function validateSettings(input: unknown): Settings | null {
-  const parsed = settingsSchema.safeParse(input)
-  return parsed.success ? parsed.data : null
+// 解析设置文件（宽松：Postel 原则——写入严格、读取宽容）
+// 为什么不全有或全无：以后加设置项时，老文件必然缺新字段；若整体校验失败就回落默认，
+// 用户已调好的项会被静默重置。这里逐字段容错——
+// - 缺字段 / 多余的未知键 / 未来版本多写的字段 → 忽略，认得的值全部保留
+// - 字段值非法 / 非对象 / 数组 / null → 该字段回落默认
+// - version 恒由服务端维护，不采信文件里的值（手工改坏也不会影响迁移判断）
+export function parseSettingsFile(input: unknown): Settings {
+  const base = defaultSettings()
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return base
+  const b = input as Record<string, unknown>
+  const style =
+    typeof b.style === 'string' && (STYLE_VALUES as readonly string[]).includes(b.style)
+      ? (b.style as RecommendationStyle)
+      : base.style
+  return { version: SETTINGS_VERSION, style }
 }
 
 // 校验 PATCH 体；失败返回 null
