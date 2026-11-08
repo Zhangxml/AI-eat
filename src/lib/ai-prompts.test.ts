@@ -64,6 +64,17 @@ describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
     expect(CHAT_MENU_FORMAT_RULE).toContain('本身就是一道菜的完整搭配')
     expect(CHAT_MENU_FORMAT_RULE).toContain('只推荐这一道')
   })
+
+  it('规则要求「继续」只出新菜，且食材覆盖为次要偏好', async () => {
+    const { CHAT_MENU_FORMAT_RULE } = await import('./ai-prompts')
+    expect(CHAT_MENU_FORMAT_RULE).toContain('继续')
+    // 第一约束：不重复已推荐
+    expect(CHAT_MENU_FORMAT_RULE).toContain('不得重复')
+    // 次要偏好：尚未用到的食材
+    expect(CHAT_MENU_FORMAT_RULE).toContain('尚未用到')
+    // 「就这些」时不再输出清单
+    expect(CHAT_MENU_FORMAT_RULE).toContain('不再输出')
+  })
 })
 
 describe('RECIPE_FORMAT_RULE 格式规则', () => {

@@ -172,7 +172,16 @@ export default function ChatView() {
     setInput('')
     setPending(true)
     // 追加用户消息 + 空 assistant 占位（流式增量拼进它）
-    const history = buildHistory(items, text)
+    // 历史里带上每轮的菜名摘要（menu 清单 / 单菜谱），让模型在「继续」时知道自己推荐过什么
+    const history = buildHistory(
+      items.map((it) => ({
+        role: it.role,
+        text: it.text,
+        menuDishNames: it.menu?.dishes.map((d) => d.name),
+        recipeName: it.recipe?.name,
+      })),
+      text,
+    )
     setItems((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '' }])
     // 当前 assistant 占位在数组中的下标（闭包内恒定，直接用索引更新）
     const idx = items.length + 1

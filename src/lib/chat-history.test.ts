@@ -38,3 +38,67 @@ describe('buildHistory 组包', () => {
     ])
   })
 })
+
+// 「继续」只追加新菜：菜单名需写回历史，否则模型看不到自己推荐过什么（实测会重复推荐同一道）
+describe('buildHistory 菜单摘要（支持「继续」去重）', () => {
+  it('带菜单的 assistant 轮次在 content 末尾附已推荐菜名', () => {
+    const items = [
+      { role: 'user' as const, text: '番茄和鸡蛋做什么' },
+      {
+        role: 'assistant' as const,
+        text: '可以这样搭。',
+        menuDishNames: ['番茄炒蛋', '番茄盅蒸蛋'],
+      },
+    ]
+    const history = buildHistory(items, '继续')
+    expect(history[1].content).toContain('可以这样搭。')
+    expect(history[1].content).toContain('已推荐')
+    expect(history[1].content).toContain('番茄炒蛋')
+    expect(history[1].content).toContain('番茄盅蒸蛋')
+  })
+
+  it('纯闲聊轮次（无菜单）不追加摘要', () => {
+    const items = [
+      { role: 'user' as const, text: '你好' },
+      { role: 'assistant' as const, text: '你好，想吃什么？' },
+    ]
+    expect(buildHistory(items, '继续')[1].content).toBe('你好，想吃什么？')
+  })
+
+  it('单菜谱直出的轮次也记录菜名', () => {
+    const items = [
+      { role: 'user' as const, text: '红烧鱼怎么做' },
+      { role: 'assistant' as const, text: '这就来。', recipeName: '红烧鱼' },
+    ]
+    const history = buildHistory(items, '继续')
+    expect(history[1].content).toContain('红烧鱼')
+  })
+
+  it('只保留最近 3 轮菜单摘要，更早轮次不再附加（防 prompt 膨胀）', () => {
+    const items = [
+      { role: 'user' as const, text: 'u1' },
+      { role: 'assistant' as const, text: 'a1', menuDishNames: ['第一轮菜'] },
+      { role: 'user' as const, text: 'u2' },
+      { role: 'assistant' as const, text: 'a2', menuDishNames: ['第二轮菜'] },
+      { role: 'user' as const, text: 'u3' },
+      { role: 'assistant' as const, text: 'a3', menuDishNames: ['第三轮菜'] },
+      { role: 'user' as const, text: 'u4' },
+      { role: 'assistant' as const, text: 'a4', menuDishNames: ['第四轮菜'] },
+    ]
+    const history = buildHistory(items, '继续')
+    const byContent = (prefix: string) => history.find(h => h.content.startsWith(prefix))!
+    expect(byContent('a1').content).toBe('a1') // 超出窗口，不再附摘要
+    expect(byContent('a2').content).toContain('第二轮菜')
+    expect(byContent('a3').content).toContain('第三轮菜')
+    expect(byContent('a4').content).toContain('第四轮菜')
+  })
+
+  it('不修改入参（纯函数，界面气泡文字保持不变）', () => {
+    const items = [
+      { role: 'assistant' as const, text: '可以这样搭。', menuDishNames: ['番茄炒蛋'] },
+    ]
+    const snapshot = JSON.parse(JSON.stringify(items))
+    buildHistory(items, '继续')
+    expect(items).toEqual(snapshot)
+  })
+})
