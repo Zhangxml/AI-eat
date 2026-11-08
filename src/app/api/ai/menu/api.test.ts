@@ -52,6 +52,19 @@ const aiMenu = {
 }
 const aiOk = `<menu>${JSON.stringify(aiMenu)}</menu>`
 
+// 分组采购夹具（7 天场景）：模型按品类分组输出
+const aiMenuGrouped = {
+  dishes: [
+    { name: '红烧排骨', category: '荤菜', reason: '经典硬菜，下饭' },
+    { name: '蒜蓉西兰花', category: '素菜', reason: '解腻均衡' },
+  ],
+  shopping: [
+    { group: '肉禽蛋', items: ['排骨 2kg（可冷冻）', '鸡蛋 20 个（冷藏 2~3 周）'] },
+    { group: '蔬菜', items: ['西兰花 3 颗（建议 3 天内吃完）'] },
+  ],
+}
+const aiOkGrouped = `<menu>${JSON.stringify(aiMenuGrouped)}</menu>`
+
 // 构造带 JSON body 的 POST 请求（handler 只读 body）
 const jsonReq = (body: unknown) =>
   new Request('http://x/api/ai/menu', {
@@ -75,7 +88,7 @@ const ENV_KEYS = [
 // 响应形态（断言用局部类型，避免全文硬编码比较）
 interface MenuResponse {
   dishes: { name: string; category: string; reason: string }[]
-  shopping: string[]
+  shopping: { group: string; items: string[] }[]
 }
 interface ErrorResponse {
   error: string
@@ -116,7 +129,13 @@ describe('POST /api/ai/menu', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as MenuResponse
     expect(body.dishes.length).toBeGreaterThanOrEqual(2)
-    expect(Array.isArray(body.shopping)).toBe(true)
+    // 采购清单为分组结构：每组 group 非空、items 为字符串数组
+    expect(body.shopping.length).toBeGreaterThan(0)
+    for (const g of body.shopping) {
+      expect(typeof g.group).toBe('string')
+      expect(g.group.length).toBeGreaterThan(0)
+      expect(Array.isArray(g.items)).toBe(true)
+    }
     // 轻量契约：每道菜只有 name/category/reason 三字段（无步骤类字段），category 限五枚举
     for (const d of body.dishes) {
       expect(Object.keys(d).sort()).toEqual(['category', 'name', 'reason'])
@@ -153,6 +172,65 @@ describe('POST /api/ai/menu', () => {
     expect(userMsg.content).toContain('避免番茄炒蛋')
     // creative 档不再说「经典家常菜为主」
     expect(userMsg.content).not.toContain('经典家常菜为主')
+  })
+
+  it('days=1（缺省）保持原有文案：不出现天数与采购基准，行为零变化', async () => {
+    aiCompleteMock.mockResolvedValueOnce(aiOk)
+    const res = await POST(jsonReq({ people: 3 }))
+    expect(res.status).toBe(200)
+    const userMsg = aiCompleteMock.mock.calls[0][1][1]
+    expect(userMsg.content).not.toContain('要买')
+    expect(userMsg.content).not.toContain('按 3 人 1 天')
+    expect(userMsg.content).not.toContain('采购总量')
+  })
+
+  it('days=7 时用户消息含天数、菜数与采购总量基准', async () => {
+    aiCompleteMock.mockResolvedValueOnce(aiOkGrouped)
+    const res = await POST(jsonReq({ people: 3, days: 7 }))
+    expect(res.status).toBe(200)
+    const userMsg = aiCompleteMock.mock.calls[0][1][1]
+    expect(userMsg.content).toContain('7 天')
+    // 菜数指引 = min(days*3, 21)
+    expect(userMsg.content).toContain('21 道')
+    // 采购按 N 人 D 天估算，并给出人均日消耗基准
+    expect(userMsg.content).toContain('按 3 人 7 天')
+    expect(userMsg.content).toContain('肉类')
+    // 不按天排
+    expect(userMsg.content).not.toContain('第 1 天')
+  })
+
+  it('days=3 时菜数指引为 9 道', async () => {
+    aiCompleteMock.mockResolvedValueOnce(aiOkGrouped)
+    await POST(jsonReq({ people: 2, days: 3 }))
+    expect(aiCompleteMock.mock.calls[0][1][1].content).toContain('9 道')
+  })
+
+  it('days 超出 1~7 / 非整数 / 非数字 → 400 且不触发 AI 调用', async () => {
+    for (const days of [0, 8, 100, 2.5, '7', null, true]) {
+      const res = await POST(jsonReq({ people: 2, days }))
+      expect(res.status, `days=${JSON.stringify(days)}`).toBe(400)
+      expect(((await res.json()) as ErrorResponse).error).toContain('days')
+    }
+    expect(aiCompleteMock).not.toHaveBeenCalled()
+  })
+
+  it('分组采购清单原样返回（group + items 结构）', async () => {
+    aiCompleteMock.mockResolvedValueOnce(aiOkGrouped)
+    const res = await POST(jsonReq({ people: 3, days: 7 }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as MenuResponse
+    expect(body.shopping).toEqual(aiMenuGrouped.shopping)
+  })
+
+  it('模型退回旧的扁平字符串数组时自动归一化为单组，不触发重试', async () => {
+    aiCompleteMock.mockResolvedValueOnce(aiOk) // 夹具 shopping 为 string[]
+    const res = await POST(jsonReq({ people: 3, days: 7 }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as MenuResponse
+    expect(body.shopping).toHaveLength(1)
+    expect(body.shopping[0].items).toEqual(aiMenu.shopping)
+    // 容错归一化而非解析失败：只调用一次
+    expect(aiCompleteMock).toHaveBeenCalledTimes(1)
   })
 
   it('people=4 时用户消息附份量级提示（建议菜数不少于 4 道）', async () => {

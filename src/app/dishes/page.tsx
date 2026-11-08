@@ -14,12 +14,9 @@ import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
 import RecipeCard from '@/components/RecipeCard'
 import { MenuEpoch } from '@/lib/menu-epoch'
+// 上限与校验口径与服务端共用同一份定义（src/lib/menu-form.ts），避免两侧漂移
+import { MAX_DAYS, MAX_PEOPLE, MAX_TEXT_CHARS, validateMenuForm } from '@/lib/menu-form'
 import type { Recipe } from '@/lib/recipe-types'
-
-// 与 /api/ai/menu 的服务端上限保持一致（people 1~50、preference ≤500 字符）：
-// 前端先拦一次，避免用户填完才在服务端吃 400
-const MAX_PEOPLE = 50
-const MAX_TEXT_CHARS = 500
 
 // Task 13 契约：POST /api/ai/menu → 200 { dishes, shopping }（category 限五枚举，name/reason 必填）
 interface MenuDish {
@@ -28,11 +25,18 @@ interface MenuDish {
   reason: string
 }
 
-// 菜单整体：附带生成菜单时使用的人数，第二段 servings 取它（避免用户事后改输入框导致份数错位）
+// 采购分组：固定五类 + 「其他」兜底（与服务端 SHOPPING_GROUPS 同义）
+interface ShoppingGroup {
+  group: string
+  items: string[]
+}
+
+// 菜单整体：附带生成菜单时使用的人数与天数，第二段 servings 取人数（避免用户事后改输入框导致份数错位）
 interface MenuData {
   people: number
+  days: number
   dishes: MenuDish[]
-  shopping: string[]
+  shopping: ShoppingGroup[]
 }
 
 // 单菜两段式状态机：idle 未生成 / generating 生成中 / ready 已生成（recipe 就绪）；error 为该卡局部错误
@@ -77,6 +81,8 @@ function toDraft(recipe: Recipe) {
 export default function DishesPage() {
   // 第一段表单：人数（受控字符串，提交时校验 ≥1 整数）与口味偏好（选填）
   const [peopleInput, setPeopleInput] = useState('')
+  // 用餐天数：默认空串（提交时按 1 天处理），1~MAX_DAYS 整数
+  const [daysInput, setDaysInput] = useState('')
   const [preference, setPreference] = useState('')
   // 人数非法时的行内提示（不发请求）
   const [formError, setFormError] = useState('')
@@ -104,21 +110,13 @@ export default function DishesPage() {
   // 第一段：开始点菜 → POST /api/ai/menu（契约 Task 13：200 { dishes, shopping } | 400/502/503 { error: 中文 }）
   async function handleMenu() {
     if (menuLoading) return
-    const people = Number(peopleInput)
-    // 人数前置校验：非整数/小于 1 直接行内报错，不发请求（与服务端 400 口径一致）
-    if (!Number.isInteger(people) || people < 1) {
-      setFormError('人数须为不小于 1 的整数')
+    // 前置校验与 /api/ai/menu 共用同一份规则（人数/天数/偏好），不发无效请求
+    const checked = validateMenuForm({ peopleInput, daysInput, preference })
+    if (!checked.ok) {
+      setFormError(checked.error)
       return
     }
-    // 上限与服务端 MAX_PEOPLE 对齐：否则会走到服务端才 400，用户白等一次往返
-    if (people > MAX_PEOPLE) {
-      setFormError(`人数最多 ${MAX_PEOPLE} 人`)
-      return
-    }
-    if (preference.trim().length > MAX_TEXT_CHARS) {
-      setFormError(`口味偏好最多 ${MAX_TEXT_CHARS} 字`)
-      return
-    }
+    const { people, days, preference: pref } = checked
     setFormError('')
     setMenuError('')
     setMenuLoading(true)
@@ -126,12 +124,13 @@ export default function DishesPage() {
       const controller = new AbortController()
       abortRef.current = controller
       // preference 选填：trim 后为空则不携带该字段（与服务端「空串视为未提供」口径一致）
-      const pref = preference.trim()
+      // 推荐风格由服务端全局设置决定（设置页可改），前端不传参
       const res = await apiFetch('/api/ai/menu', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // 推荐风格由服务端全局设置决定（设置页可改），前端不传参
-        body: JSON.stringify(pref === '' ? { people } : { people, preference: pref }),
+        body: JSON.stringify(
+          pref === '' ? { people, days } : { people, days, preference: pref },
+        ),
         signal: controller.signal,
       })
       if (controller.signal.aborted) return
@@ -147,11 +146,11 @@ export default function DishesPage() {
         setMenuError(msg)
         return
       }
-      const data = (await res.json()) as { dishes: MenuDish[]; shopping: string[] }
+      const data = (await res.json()) as { dishes: MenuDish[]; shopping: ShoppingGroup[] }
       // 新菜单覆盖旧菜单，并重置全部 per-dish 状态（人数/偏好变了，旧菜卡的生成与入库状态不再适用）
       // 推进菜单代次：此前发起的「生成菜谱」请求返回时会被判为过期并丢弃
       menuEpochRef.current.bump()
-      setMenu({ people, dishes: data.dishes, shopping: data.shopping })
+      setMenu({ people, days, dishes: data.dishes, shopping: data.shopping })
       setDishStates({})
       setSavedNames({})
       setSavingNames({})
@@ -298,6 +297,23 @@ export default function DishesPage() {
           aria-label="用餐人数"
           className={inputClass}
         />
+        {/* 吃几天：硬上限 MAX_DAYS（一周）；留空按 1 天处理，与「只买一餐」的行为一致 */}
+        <label htmlFor="days" className="text-sm text-neutral-600 dark:text-neutral-400">
+          吃几天（1~{MAX_DAYS}，留空按 1 天）
+        </label>
+        <input
+          id="days"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={MAX_DAYS}
+          step={1}
+          value={daysInput}
+          onChange={(e) => setDaysInput(e.target.value)}
+          placeholder={`例如：7（最多 ${MAX_DAYS} 天）`}
+          aria-label="用餐天数"
+          className={inputClass}
+        />
         <label htmlFor="preference" className="text-sm text-neutral-600 dark:text-neutral-400">
           口味偏好（选填）
         </label>
@@ -389,17 +405,30 @@ export default function DishesPage() {
             })}
           </ul>
 
-          {/* 采购建议清单区块：合并去重后的采购清单 */}
+          {/* 采购建议清单区块：按品类分组（肉禽蛋/蔬菜/豆制品/主食/调料/其他），每项为该品类下的总量 */}
           <section aria-label="采购建议" className="rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900">
-            <h2 className="mb-2 text-base font-medium text-neutral-900 dark:text-neutral-100">采购建议</h2>
+            <h2 className="mb-1 text-base font-medium text-neutral-900 dark:text-neutral-100">采购建议</h2>
+            {/* 口径说明：避免用户把 AI 估算当成精确用量 */}
+            <p className="mb-3 text-xs text-neutral-500 dark:text-neutral-400">
+              按 {menu.people} 人 {menu.days} 天估算，实际按家里存量和饭量调整
+            </p>
             {menu.shopping.length > 0 ? (
-              <ul className="flex list-disc flex-col gap-1 pl-5 text-sm leading-6 text-neutral-800 dark:text-neutral-200">
-                {menu.shopping.map((item, i) => (
-                  <li key={i} className="min-w-0 break-words">
-                    {item}
-                  </li>
+              <div className="flex flex-col gap-3">
+                {menu.shopping.map((g) => (
+                  <div key={g.group}>
+                    <h3 className="mb-1 text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                      {g.group}
+                    </h3>
+                    <ul className="flex list-disc flex-col gap-1 pl-5 text-sm leading-6 text-neutral-800 dark:text-neutral-200">
+                      {g.items.map((item, i) => (
+                        <li key={i} className="min-w-0 break-words">
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ))}
-              </ul>
+              </div>
             ) : (
               <p className="text-sm text-neutral-400 dark:text-neutral-500">暂无采购建议</p>
             )}
