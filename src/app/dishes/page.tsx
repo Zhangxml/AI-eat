@@ -16,6 +16,11 @@ import RecipeCard from '@/components/RecipeCard'
 import { MenuEpoch } from '@/lib/menu-epoch'
 import type { Recipe } from '@/lib/recipe-types'
 
+// 与 /api/ai/menu 的服务端上限保持一致（people 1~50、preference ≤500 字符）：
+// 前端先拦一次，避免用户填完才在服务端吃 400
+const MAX_PEOPLE = 50
+const MAX_TEXT_CHARS = 500
+
 // Task 13 契约：POST /api/ai/menu → 200 { dishes, shopping }（category 限五枚举，name/reason 必填）
 interface MenuDish {
   name: string
@@ -103,6 +108,15 @@ export default function DishesPage() {
     // 人数前置校验：非整数/小于 1 直接行内报错，不发请求（与服务端 400 口径一致）
     if (!Number.isInteger(people) || people < 1) {
       setFormError('人数须为不小于 1 的整数')
+      return
+    }
+    // 上限与服务端 MAX_PEOPLE 对齐：否则会走到服务端才 400，用户白等一次往返
+    if (people > MAX_PEOPLE) {
+      setFormError(`人数最多 ${MAX_PEOPLE} 人`)
+      return
+    }
+    if (preference.trim().length > MAX_TEXT_CHARS) {
+      setFormError(`口味偏好最多 ${MAX_TEXT_CHARS} 字`)
       return
     }
     setFormError('')
@@ -275,6 +289,7 @@ export default function DishesPage() {
           type="number"
           inputMode="numeric"
           min={1}
+          max={MAX_PEOPLE}
           step={1}
           value={peopleInput}
           onChange={(e) => setPeopleInput(e.target.value)}
@@ -289,6 +304,7 @@ export default function DishesPage() {
           id="preference"
           type="text"
           value={preference}
+          maxLength={MAX_TEXT_CHARS}
           onChange={(e) => setPreference(e.target.value)}
           placeholder="例如：清淡、少辣、孩子吃"
           aria-label="口味偏好（选填）"

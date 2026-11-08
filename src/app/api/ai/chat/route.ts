@@ -340,7 +340,9 @@ export async function POST(req: Request): Promise<Response> {
         if (!clientGone) {
           // 上游结束：冲刷正文残余（半截标签字面量）；流中途断在标签态时拿回未闭合缓冲与类型，走同一条提取路径
           const flushUnclosed = sm.flush(chunk => emit(sseEvent('message', { t: chunk })))
-          const pending = closedContent
+          // 用 !== null 判断：模型输出空标签（如 <menu></menu>）时 closedContent 为 ''，
+          // 用真值判断会静默当成「纯对话成功」，用户看到空白却没有任何提示
+          const pending = closedContent !== null
             ? { kind: closedKind, content: closedContent }
             : flushUnclosed
           if (pending !== null) {

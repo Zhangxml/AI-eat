@@ -247,6 +247,16 @@ describe('POST /api/ai/chat', () => {
     expect(aiCompleteMock).not.toHaveBeenCalled()
   })
 
+  it('模型输出空标签 <menu></menu> → 发 error 事件（不能静默当作纯对话成功）', async () => {
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(deltaFrame('<menu></menu>') + DONE_FRAME))
+    aiCompleteMock.mockResolvedValueOnce('<menu></menu>') // 重试也是空
+    const res = await POST(jsonReq({ messages: [{ role: 'user', content: '有番茄做什么' }] }))
+    const frames = parseSse(await res.text())
+    // 空缓冲必须走 error，而不是悄悄只发 done
+    expect(frames.map(f => f.event)).toContain('error')
+    expect(frames[frames.length - 1].event).toBe('done')
+  })
+
   it('上游流在 </recipe> 前截断（模型漏写闭合标签）：残留缓冲仍走提取→重试→error 路径，且正文不泄漏', async () => {
     aiChatStreamMock.mockResolvedValueOnce(
       // 截断在 JSON 中途（缺少部分字段与结尾括号）：平衡扫描无法解出，必须走重试

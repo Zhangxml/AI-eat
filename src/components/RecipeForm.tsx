@@ -12,6 +12,10 @@ import type { DraftRecipe, Nutrition, Recipe } from '@/lib/recipe-types'
 // 分类枚举与 recipe-types 保持一致；首项空串表示「不设置」
 const CATEGORY_OPTIONS: NonNullable<Recipe['category']>[] = ['荤菜', '素菜', '汤', '主食', '其他']
 
+// 与 /api/ai/recipes、/api/ai/nutrition 的服务端上限保持一致（单字段 ≤500 字符）：
+// 前端 maxLength 先拦一道，避免用户填完才在服务端吃 400
+const MAX_TEXT_CHARS = 500
+
 // 食材行的受控状态结构
 interface IngredientRow {
   name: string
@@ -401,6 +405,7 @@ export default function RecipeForm({
           type="text"
           required
           value={name}
+          maxLength={MAX_TEXT_CHARS}
           onChange={(e) => setName(e.target.value)}
           placeholder="例如：番茄炒蛋（或填名称后点「AI 生成」）"
           aria-label="菜谱名称"
