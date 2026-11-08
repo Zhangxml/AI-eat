@@ -13,6 +13,7 @@ import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, buildChatMenuFormatRule, e
 import { resolveTemperature } from '@/lib/ai-temperatures'
 import { pickInspiration, type InspirationStyle } from '@/lib/inspiration'
 import { listRecipes } from '@/lib/recipe-store'
+import { readSettings } from '@/lib/settings-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
 import { checkBodySize, BODY_LIMIT_BYTES } from '@/lib/body-limit'
@@ -214,9 +215,9 @@ export async function POST(req: Request): Promise<Response> {
     await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
     return Response.json({ error: '参数缺失或非法：messages 须为非空的消息数组' }, { status: 400 })
   }
-  // 风格档位（审计：默认曾偏向「避免大路菜」导致不家常——现默认 home，前端可切 creative）
-  const styleRaw = new URL(req.url).searchParams.get('style')
-  const style: InspirationStyle = styleRaw === 'creative' ? 'creative' : 'home'
+  // 推荐风格档位：由全局设置（data/settings.json）决定，服务端单一事实来源。
+  // 前端不再传参——即便有人直接调接口，行为也与设置页一致。
+  const style: InspirationStyle = (await readSettings()).style
   // 输入规模上限（审计修复 #4）：条数 ≤50、单条 content ≤8000 字符、总字符 ≤50000——
   // 防御超大对话历史把上游 token 消耗与内存放大（400 中文文案与既有 400 形态一致）
   if (messages.length > CHAT_MAX_MESSAGES) {

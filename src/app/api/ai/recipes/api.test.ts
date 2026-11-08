@@ -105,6 +105,16 @@ describe('POST /api/ai/recipes', () => {
     await fs.rm(dir, { recursive: true, force: true })
   })
 
+  it('推荐风格取自全局设置：creative 时系统提示词换创意人设（请求体传 style 已不再生效）', async () => {
+    await fs.writeFile(`${dir}/settings.json`, JSON.stringify({ version: 1, style: 'creative' }), 'utf8')
+    aiCompleteMock.mockResolvedValueOnce(aiOk)
+    const res = await POST(jsonReq({ ingredients: ['番茄', '鸡蛋'], style: 'home' }))
+    expect(res.status).toBe(200)
+    const [sysMsg] = aiCompleteMock.mock.calls[0][1]
+    expect(sysMsg.content).toContain('有新意的搭配')
+    expect(sysMsg.content).not.toContain('优先经典家常做法')
+  })
+
   it('按食材生成并解析成功：source=ai，id/时间戳被无条件覆写（AI 照抄示例 id 也被替换）', async () => {
     listRecipesMock.mockResolvedValue({ recipes: [{ ...aiRecipe }], invalidFiles: [] })
     aiCompleteMock.mockResolvedValueOnce(aiOk)

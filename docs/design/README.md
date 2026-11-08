@@ -19,6 +19,7 @@
 | AI 对话 | [chat](./chat/README.md) | 首页「问问AI」：SSE 五事件协议流式聊天（message/recipe/menu/error/done），菜谱卡片一键入库（所见即所得） |
 | 点菜·买什么 | [menu](./menu/README.md) | 两段式：人数+偏好→菜单+采购清单；感兴趣的菜按需生成完整菜谱入库 |
 | 菜谱库界面 | [recipes-ui](./recipes-ui/README.md) | 列表/录入（AI 回填）/详情三页 + 共用表单；裸形状契约与历史坑位说明 |
+| 全局设置 | [settings](./settings/README.md) | 用户级可写偏好（推荐风格）存 `data/settings.json`；PATCH 局部更新，AI 路由服务端直接读，前端不传参 |
 | 鉴权 | [auth](./auth/README.md) | PASSWORD 登录会话（HMAC token）+ 删除保护（DELETE_PASSWORD），环境变量开关，未设即零摩擦 |
 | 备份恢复 | [backup](./backup/README.md) | 目录直备主通道 + 页面导出导入（imported/skipped/invalid 三分报告） |
 | 部署运行 | [deploy](./deploy/README.md) | run.sh 裸机 / Docker compose 双形态，8888 端口，data 卷持久化，.env 配置不入库 |

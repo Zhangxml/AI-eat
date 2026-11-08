@@ -4,6 +4,7 @@
 // 契约：GET /api/backup → 200 { exportedAt, recipes }（Content-Disposition 附件头）
 //       POST /api/backup { recipes } → 200 { imported, skipped, skippedIds, invalidIds } | 400 { error }
 //       GET /api/config → 200 { aiConfigured, baseUrl, model, authEnabled }（绝不含 apiKey）
+//       GET/PATCH /api/settings → 用户级可写偏好（推荐风格等），存服务器 data/settings.json
 // 纯 UI 页无单测（裁定 5），移动端三约束：单列、触摸目标 ≥44px、无横向滚动
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -16,6 +17,12 @@ interface ConfigResponse {
   model: string | null
   authEnabled: boolean
   deleteEnabled: boolean
+}
+
+// GET/PATCH /api/settings 响应契约（与 src/lib/settings.ts 一致）
+interface SettingsResponse {
+  version: number
+  style: 'home' | 'creative'
 }
 
 // POST /api/backup 导入结果契约
@@ -38,6 +45,10 @@ export default function SettingsPage() {
   const [error, setError] = useState('')
   // 导出进行中状态
   const [exporting, setExporting] = useState(false)
+  // 用户偏好（推荐风格）：null=加载中；保存中禁用切换防连点；错误显示在分组内
+  const [settings, setSettings] = useState<SettingsResponse | null>(null)
+  const [savingStyle, setSavingStyle] = useState(false)
+  const [styleError, setStyleError] = useState('')
   // 竞态防护：组件卸载后不再 setState
   const mountedRef = useRef(true)
 
@@ -58,13 +69,74 @@ export default function SettingsPage() {
     }
   }, [])
 
+  // 拉取用户偏好：失败保持 null（分组显示「加载失败」+ 重试），不影响其他分组
+  const loadSettings = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/settings')
+      if (!res.ok || !mountedRef.current) {
+        if (mountedRef.current) setStyleError('偏好加载失败')
+        return
+      }
+      const data = (await res.json()) as SettingsResponse
+      if (mountedRef.current) {
+        setSettings(data)
+        setStyleError('')
+      }
+    } catch {
+      if (mountedRef.current) setStyleError('偏好加载失败')
+    }
+  }, [])
+
+  // 切换推荐风格：乐观更新（点即高亮）→ PATCH；失败回滚并提示
+  const changeStyle = useCallback(
+    async (next: SettingsResponse['style']) => {
+      if (savingStyle || settings === null || settings.style === next) return
+      const prev = settings
+      setStyleError('')
+      setSettings({ ...prev, style: next })
+      setSavingStyle(true)
+      try {
+        const res = await apiFetch('/api/settings', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ style: next }),
+        })
+        if (!res.ok) {
+          let msg = '保存失败，请重试'
+          try {
+            const data = (await res.json()) as { error?: string }
+            if (typeof data?.error === 'string' && data.error !== '') msg = data.error
+          } catch {
+            // 非 JSON 错误体：沿用默认文案
+          }
+          if (mountedRef.current) {
+            setSettings(prev)
+            setStyleError(msg)
+          }
+          return
+        }
+        const data = (await res.json()) as SettingsResponse
+        if (mountedRef.current) setSettings(data)
+      } catch {
+        if (mountedRef.current) {
+          setSettings(prev)
+          setStyleError('保存失败，网络异常，请稍后重试')
+        }
+      } finally {
+        if (mountedRef.current) setSavingStyle(false)
+      }
+    },
+    [savingStyle, settings],
+  )
+
   useEffect(() => {
     mountedRef.current = true
     void loadConfig()
+    void loadSettings()
     return () => {
       mountedRef.current = false
     }
-  }, [loadConfig])
+  }, [loadConfig, loadSettings])
 
   // 导出：GET /api/backup → blob → 创建 <a download> 触发浏览器下载
   // 文件名取 Content-Disposition 里的 filename（与服务端 YYYYMMDD 保持一致），解析失败回退本地日期
@@ -150,6 +222,63 @@ export default function SettingsPage() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
       <h1 className="mb-4 text-lg font-medium text-neutral-900 dark:text-neutral-100">设置</h1>
+
+      {/* 推荐风格：全局偏好（存服务端 data/settings.json），影响问问AI 与买什么两个模块 */}
+      <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+        <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">推荐风格</h2>
+        {settings === null ? (
+          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+            {styleError !== '' ? (
+              <>
+                {styleError}{' '}
+                <button
+                  type="button"
+                  onClick={() => void loadSettings()}
+                  className="underline underline-offset-2"
+                >
+                  重试
+                </button>
+              </>
+            ) : (
+              '加载中…'
+            )}
+          </p>
+        ) : (
+          <>
+            <div className="flex items-center gap-2" role="group" aria-label="推荐风格">
+              {[
+                { key: 'home' as const, label: '家常' },
+                { key: 'creative' as const, label: '换换口味' },
+              ].map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => void changeStyle(opt.key)}
+                  aria-pressed={settings.style === opt.key}
+                  disabled={savingStyle}
+                  className={`min-h-[36px] rounded-full border px-4 py-1 text-sm transition-colors disabled:opacity-60 ${
+                    settings.style === opt.key
+                      ? 'border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900'
+                      : 'border-neutral-300 bg-white text-neutral-600 active:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:active:bg-neutral-800'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
+              {settings.style === 'home'
+                ? '经典家常菜优先：做法简单、食材好买、下饭'
+                : '中式地方风味优先，避免常见大路菜'}
+            </p>
+          </>
+        )}
+        {styleError !== '' && settings !== null && (
+          <p role="alert" className="mt-2 break-words text-sm text-red-600 dark:text-red-400">
+            {styleError}
+          </p>
+        )}
+      </section>
 
       {/* 备份区块：导出 + 导入 */}
       <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">

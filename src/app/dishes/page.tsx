@@ -80,8 +80,6 @@ export default function DishesPage() {
   const [preference, setPreference] = useState('')
   // 人数非法时的行内提示（不发请求）
   const [formError, setFormError] = useState('')
-  // 风格档位：home=经典家常（默认）/ creative=中式创意换口味
-  const [style, setStyle] = useState<'home' | 'creative'>('home')
   // 第一段加载态与页面顶部错误条文案
   const [menuLoading, setMenuLoading] = useState(false)
   const [menuError, setMenuError] = useState('')
@@ -132,9 +130,8 @@ export default function DishesPage() {
       const res = await apiFetch('/api/ai/menu', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          pref === '' ? { people, style } : { people, preference: pref, style },
-        ),
+        // 推荐风格由服务端全局设置决定（设置页可改），前端不传参
+        body: JSON.stringify(pref === '' ? { people } : { people, preference: pref }),
         signal: controller.signal,
       })
       if (controller.signal.aborted) return
@@ -182,7 +179,7 @@ export default function DishesPage() {
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dish: name, servings: menu.people, style }),
+        body: JSON.stringify({ dish: name, servings: menu.people }),
         signal: controller.signal,
       })
       // 卸载触发的 abort：结果作废，不再 setState
@@ -314,28 +311,6 @@ export default function DishesPage() {
           aria-label="口味偏好（选填）"
           className={inputClass}
         />
-        {/* 风格档位：默认家常（经典家常优先）；切到「换换口味」才用中式创意方向 */}
-        <div className="flex items-center gap-2" role="group" aria-label="菜单风格">
-          <span className="text-sm text-neutral-600 dark:text-neutral-400">风格</span>
-          {[
-            { key: 'home' as const, label: '家常' },
-            { key: 'creative' as const, label: '换换口味' },
-          ].map((opt) => (
-            <button
-              key={opt.key}
-              type="button"
-              onClick={() => setStyle(opt.key)}
-              aria-pressed={style === opt.key}
-              className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                style === opt.key
-                  ? 'border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900'
-                  : 'border-neutral-300 bg-white text-neutral-600 active:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:active:bg-neutral-800'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
         {/* 人数非法行内提示 */}
         {formError !== '' && <p className="text-sm text-red-500 dark:text-red-400">{formError}</p>}
         <button

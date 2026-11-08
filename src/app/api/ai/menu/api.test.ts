@@ -143,9 +143,11 @@ describe('POST /api/ai/menu', () => {
     expect(aiCompleteMock.mock.calls[0][2]).toEqual({ temperature: 0.8 })
   })
 
-  it('style=creative 时用户消息注入反大路菜约束（替换家常档位句）', async () => {
+  it('全局设置为 creative 时用户消息注入反大路菜约束（替换家常档位句）', async () => {
+    // 档位来自服务端全局设置文件（data/settings.json），不再由请求 body 传入
+    await fs.writeFile(`${dir}/settings.json`, JSON.stringify({ version: 1, style: 'creative' }), 'utf8')
     aiCompleteMock.mockResolvedValueOnce(aiOk)
-    const res = await POST(jsonReq({ people: 3, style: 'creative' }))
+    const res = await POST(jsonReq({ people: 3 }))
     expect(res.status).toBe(200)
     const userMsg = aiCompleteMock.mock.calls[0][1][1]
     expect(userMsg.content).toContain('避免番茄炒蛋')

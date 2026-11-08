@@ -167,6 +167,29 @@ describe('POST /api/ai/chat', () => {
     expect(sent.slice(1)).toEqual([{ role: 'user', content: '今天吃什么' }])
   })
 
+  it('推荐风格取自全局设置（data/settings.json）：默认 home，切 creative 后生效，URL 的 ?style= 不再影响', async () => {
+    // 1) 无设置文件 → home 人设
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
+    await POST(jsonReq({ messages: [{ role: 'user', content: '今天吃什么' }] }))
+    let sysContent = (aiChatStreamMock.mock.calls[0][1] as ChatMessage[])[0].content
+    expect(sysContent).toContain('优先经典家常做法')
+    expect(sysContent).not.toContain('有新意的搭配')
+
+    // 2) 设置文件改为 creative → 即使 URL 仍带 ?style=home 也以设置为准（服务端单一事实来源）
+    await fs.writeFile(`${dir}/settings.json`, JSON.stringify({ version: 1, style: 'creative' }), 'utf8')
+    aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
+    await POST(
+      new Request('http://x/api/ai/chat?style=home', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: '今天吃什么' }] }),
+      }) as unknown as Parameters<typeof POST>[0],
+    )
+    sysContent = (aiChatStreamMock.mock.calls[1][1] as ChatMessage[])[0].content
+    expect(sysContent).toContain('有新意的搭配')
+    expect(sysContent).not.toContain('优先经典家常做法')
+  })
+
   it('菜谱以 recipe 事件完整送达：parse 后 name 正确且 id/时间戳/source 被无条件覆写', async () => {
     listRecipesMock.mockResolvedValue({ recipes: [{ ...aiRecipe }], invalidFiles: [] })
     aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))

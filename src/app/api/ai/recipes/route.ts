@@ -6,12 +6,13 @@
 import { loadAiConfig, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, extractRecipeJson } from '@/lib/ai-prompts'
 import { listRecipes } from '@/lib/recipe-store'
+import { readSettings } from '@/lib/settings-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { resolveTemperature } from '@/lib/ai-temperatures'
-import { pickInspiration } from '@/lib/inspiration'
+import { pickInspiration, type InspirationStyle } from '@/lib/inspiration'
 
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
@@ -25,7 +26,7 @@ const MAX_SERVINGS = 50
 // 读取 JSON body 并做参数校验；非法返回 null（route 层转 400）
 async function parseInput(
   req: Request,
-): Promise<{ ingredients?: string[]; dish?: string; servings?: number; style: 'home' | 'creative' } | null> {
+): Promise<{ ingredients?: string[]; dish?: string; servings?: number } | null> {
   let body: unknown
   try {
     body = await req.json()
@@ -72,9 +73,7 @@ async function parseInput(
 
   // ingredients 与 dish 至少一个非空，否则 400
   if (ingredients === undefined && dish === undefined) return null
-  // style：可选档位，'creative' 之外一律回落 home（含未提供/空串）
-  const style: 'home' | 'creative' = b.style === 'creative' ? 'creative' : 'home'
-  return { ingredients, dish, servings, style }
+  return { ingredients, dish, servings }
 }
 
 // 组装用户消息：食材/菜名/份量拼装（inspiration 由调用方按需追加，这里不拼）
@@ -82,7 +81,6 @@ function buildUserMessage(input: {
   ingredients?: string[]
   dish?: string
   servings?: number
-  style: 'home' | 'creative'
 }): string {
   const parts: string[] = []
   if (input.ingredients) {
@@ -113,6 +111,9 @@ export async function POST(req: Request): Promise<Response> {
     )
   }
 
+  // 推荐风格档位：全局设置（data/settings.json）决定，前端不再传参
+  const style: InspirationStyle = (await readSettings()).style
+
   // AI 未配置：loadAiConfig throw 中文错误 → 503（env 真实路径，测试只 mock aiComplete）
   let cfg
   try {
@@ -133,10 +134,10 @@ export async function POST(req: Request): Promise<Response> {
   }
   const system: ChatMessage = {
     role: 'system',
-    content: [systemPromptWithLibrary(recipes, input.style), RECIPE_FORMAT_RULE].join('\n'),
+    content: [systemPromptWithLibrary(recipes, style), RECIPE_FORMAT_RULE].join('\n'),
   }
   // 有食材、未指定菜名时才加灵感种子：帮助跳出固定搭配；用户明确指定菜名时严格按菜名生成，不跑偏。
-  const inspiration = input.ingredients && !input.dish ? `；${pickInspiration(input.style)}（合理范围内参考，不必硬套）` : ''
+  const inspiration = input.ingredients && !input.dish ? `；${pickInspiration(style)}（合理范围内参考，不必硬套）` : ''
   const baseUser: ChatMessage = { role: 'user', content: `${buildUserMessage(input)}${inspiration}` }
   // 温度分层：完整菜谱字段多，固定 0.7 优先保证结构化 JSON 成功率。
   const aiOptions = { temperature: resolveTemperature('recipe') }

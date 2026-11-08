@@ -74,8 +74,6 @@ export default function ChatView() {
   const [savingIds, setSavingIds] = useState<Record<string, boolean>>({})
   // 推荐清单逐菜状态：以「消息下标:菜名」为键（跨清单同名菜互不干扰），确认后逐菜生成完整菜谱
   const [dishStates, setDishStates] = useState<Record<string, MenuDishState>>({})
-  // 风格档位：home=经典家常（默认）/ creative=中式创意换口味；随请求发 style，服务端切提示词与灵感池
-  const [style, setStyle] = useState<'home' | 'creative'>('home')
   // 自动滚底：气泡区 ref，增量/卡片/错误到达时滚动到底
   const scrollRef = useRef<HTMLDivElement>(null)
   // 请求取消（审计修复）：进行中的 chat / 逐菜生成请求统一挂到当前 AbortController 上，
@@ -140,7 +138,7 @@ export default function ChatView() {
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dish: dishName, style }),
+        body: JSON.stringify({ dish: dishName }),
         signal: controller.signal,
       })
       // 卸载触发的 abort：请求结果作废，不再 setState
@@ -194,7 +192,8 @@ export default function ChatView() {
     try {
       const controller = new AbortController()
       abortRef.current = controller
-      const res = await apiFetch(`/api/ai/chat?style=${style}`, {
+      // 推荐风格由服务端全局设置决定（设置页可改），前端不传参
+      const res = await apiFetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: history }),
@@ -356,28 +355,6 @@ export default function ChatView() {
 
       {/* 底部输入区：贴底固定在滚动区下方；软键盘弹出时 dvh 容器压缩、气泡区滚动、输入框保持可见 */}
       <div className="border-t border-neutral-200 bg-white px-3 py-2 dark:border-neutral-800 dark:bg-neutral-900">
-        {/* 风格档位：默认家常（经典家常优先）；切到「换换口味」才使用中式创意方向 */}
-        <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2" role="group" aria-label="推荐风格">
-          {([
-            { key: 'home', label: '家常' },
-            { key: 'creative', label: '换换口味' },
-          ] as const).map((opt) => (
-            <button
-              key={opt.key}
-              type="button"
-              onClick={() => setStyle(opt.key)}
-              aria-pressed={style === opt.key}
-              disabled={pending}
-              className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                style === opt.key
-                  ? 'border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900'
-                  : 'border-neutral-300 bg-white text-neutral-600 active:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:active:bg-neutral-800'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
         <div className="mx-auto flex max-w-3xl items-end gap-2">
           <textarea
             value={input}

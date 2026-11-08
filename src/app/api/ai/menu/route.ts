@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { loadAiConfig, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { systemPromptWithLibrary, extractJson } from '@/lib/ai-prompts'
 import { listRecipes } from '@/lib/recipe-store'
+import { readSettings } from '@/lib/settings-store'
 import type { Recipe } from '@/lib/recipe-types'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
@@ -57,7 +58,7 @@ function extractMenuJson(text: string): z.infer<typeof menuSchema> | null {
 // 读取 JSON body 并做参数校验；非法返回 null（route 层转 400）
 async function parseInput(
   req: Request,
-): Promise<{ people: number; preference?: string; style: InspirationStyle } | null> {
+): Promise<{ people: number; preference?: string } | null> {
   let body: unknown
   try {
     body = await req.json()
@@ -80,9 +81,7 @@ async function parseInput(
     if (trimmed.length > MAX_TEXT_CHARS) return null
     if (trimmed !== '') preference = trimmed
   }
-  // style：可选档位，'creative' 之外一律回落 home（含未提供/空串）
-  const style: InspirationStyle = b.style === 'creative' ? 'creative' : 'home'
-  return { people: b.people, preference, style }
+  return { people: b.people, preference }
 }
 
 // 组装用户消息：人数（含份量级提示：people≥4 建议菜数不少于人数）、口味偏好、荤素搭配、
@@ -142,6 +141,9 @@ export async function POST(req: Request): Promise<Response> {
     )
   }
 
+  // 推荐风格档位：全局设置（data/settings.json）决定，前端不再传参
+  const style: InspirationStyle = (await readSettings()).style
+
   // AI 未配置：loadAiConfig throw 中文错误 → 503（env 真实路径，测试只 mock aiComplete）
   let cfg
   try {
@@ -162,9 +164,9 @@ export async function POST(req: Request): Promise<Response> {
   }
   const system: ChatMessage = {
     role: 'system',
-    content: [systemPromptWithLibrary(recipes, input.style), MENU_FORMAT_RULE].join('\n'),
+    content: [systemPromptWithLibrary(recipes, style), MENU_FORMAT_RULE].join('\n'),
   }
-  const baseUser: ChatMessage = { role: 'user', content: buildUserMessage(input) }
+  const baseUser: ChatMessage = { role: 'user', content: buildUserMessage({ ...input, style }) }
   // 温度分层：一桌菜单是轻量结构，0.8 略偏创意；解析失败仍有一次重试兜底
   const aiOptions = { temperature: resolveTemperature('menu') }
 
