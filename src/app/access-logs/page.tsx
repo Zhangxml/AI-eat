@@ -102,7 +102,7 @@ export default function AccessLogsPage() {
 
       {/* 说明条：记录范围（方案 A）——写操作/AI 调用/登录尝试，普通读请求不记 */}
       <p className="mb-3 text-xs leading-5 text-neutral-400 dark:text-neutral-500">
-        记录范围：菜谱写入、删除、AI 生成/点菜、备份导入、登录尝试等敏感操作（普通浏览不记录）；最多保留最近 1000 条。
+        记录范围：菜谱写入、删除、AI 生成/点菜、备份导入、登录尝试等敏感操作（普通浏览不记录）；最多保留最近 200 条。
       </p>
 
       {/* 错误条 */}

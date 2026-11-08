@@ -28,8 +28,8 @@ function accessLogPath(): string {
   return path.join(dataDir, 'logs', 'access.jsonl')
 }
 
-// 容量上限：超过即丢弃最旧条目（保留最近 MAX_ENTRIES 条）。自用写操作频率低，1000 条足够回溯
-const MAX_ENTRIES = 1000
+// 容量上限：超过即丢弃最旧条目（保留最近 MAX_ENTRIES 条）。200 条（4 页）足够回溯近期敏感操作
+const MAX_ENTRIES = 200
 
 // 从请求中提取客户端 IP：优先 x-forwarded-for 首段（反代场景，借鉴 LibreTV 惯例），
 // 回退到 Node 扩展的 socket 远端地址（直连场景）。取不到返回 'unknown'

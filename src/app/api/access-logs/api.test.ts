@@ -35,21 +35,21 @@ describe('访问日志', () => {
     expect(typeof logs[0].time).toBe('string')
   })
 
-  it('容量滚动：超过上限丢弃最旧条目', async () => {
+  it('容量滚动：超过上限（200）丢弃最旧条目', async () => {
     // 直接写满上限+2 条（快速循环，绕过 append 的多次读改写）
     const file = `${dir}/data/logs/access.jsonl`
     await fs.mkdir(`${dir}/data/logs`, { recursive: true })
-    const lines = Array.from({ length: 1002 }, (_, i) =>
+    const lines = Array.from({ length: 202 }, (_, i) =>
       JSON.stringify({ time: 't', ip: `ip-${i}`, method: 'GET', path: '/x', status: 200 }),
     ).join('\n')
     await fs.writeFile(file, lines + '\n', 'utf8')
-    // 再追加一条：应丢弃最旧（ip-0~ip-2），总数回到 1000
+    // 再追加一条：应丢弃最旧（ip-0~ip-2），总数回到 200
     await appendAccessLog({ ip: 'new-ip', method: 'POST', path: '/y', status: 200 })
     const logs = await readAccessLogs()
-    expect(logs).toHaveLength(1000)
+    expect(logs).toHaveLength(200)
     expect(logs[0].ip).toBe('new-ip') // 最新在前
-    expect(logs[1].ip).toBe('ip-1001') // 次新
-    expect(logs[999].ip).toBe('ip-3') // 最旧的保留者（ip-0~ip-2 已被滚动丢弃）
+    expect(logs[1].ip).toBe('ip-201') // 次新
+    expect(logs[199].ip).toBe('ip-3') // 最旧的保留者（ip-0~ip-2 已被滚动丢弃）
   })
 
   it('坏行容忍：手改文件留下的非法行被跳过不崩溃', async () => {
