@@ -3,6 +3,7 @@ import { getRecipe, updateRecipe, deleteRecipe } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe } from '@/lib/recipe-types'
 import { requireAuth } from '@/lib/auth'
+import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { timingSafeEqual } from 'node:crypto'
 
 // 读取 JSON body 并用 zod 校验为草稿；解析失败或校验失败返回 null
@@ -35,9 +36,13 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   const { id } = await ctx.params
   const draft = await parseDraft(req)
   if (!draft) {
+    // 访问日志（方案 A：写操作；400 也如实记录）
+    await appendAccessLog({ ip: clientIpOf(req), method: 'PUT', path: `/api/recipes/${id}`, status: 400 })
     return Response.json({ error: '请求体不是合法的菜谱草稿' }, { status: 400 })
   }
   const recipe = await updateRecipe(id, draft)
+  // 访问日志：200 更新成功 / 404 菜谱不存在
+  await appendAccessLog({ ip: clientIpOf(req), method: 'PUT', path: `/api/recipes/${id}`, status: recipe ? 200 : 404 })
   if (!recipe) {
     return Response.json({ error: '菜谱不存在' }, { status: 404 })
   }
@@ -50,6 +55,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
 export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const denied = requireAuth(req)
   if (denied) return denied
+  const ip = clientIpOf(req)
   // 删除保护开关：显式 DELETE_ENABLED=true 且密码非空才启用（两个条件缺一不可，防只配一半半失效）
   const deleteGuardEnabled = process.env.DELETE_ENABLED === 'true' && Boolean(process.env.DELETE_PASSWORD)
   let suppliedPassword: string | undefined
@@ -59,13 +65,16 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     try {
       body = await req.json()
     } catch {
+      await appendAccessLog({ ip, method: 'DELETE', path: '/api/recipes/:id', status: 403 })
       return Response.json({ error: '删除密码校验失败' }, { status: 403 })
     }
     if (typeof body !== 'object' || body === null) {
+      await appendAccessLog({ ip, method: 'DELETE', path: '/api/recipes/:id', status: 403 })
       return Response.json({ error: '删除密码校验失败' }, { status: 403 })
     }
     const b = body as Record<string, unknown>
     if (typeof b.deletePassword !== 'string') {
+      await appendAccessLog({ ip, method: 'DELETE', path: '/api/recipes/:id', status: 403 })
       return Response.json({ error: '删除密码校验失败' }, { status: 403 })
     }
     suppliedPassword = b.deletePassword
@@ -74,11 +83,14 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     const a = Buffer.from(suppliedPassword, 'utf8')
     const bb = Buffer.from(expected, 'utf8')
     if (a.length !== bb.length || !timingSafeEqual(a, bb)) {
+      await appendAccessLog({ ip, method: 'DELETE', path: '/api/recipes/:id', status: 403 })
       return Response.json({ error: '删除密码校验失败' }, { status: 403 })
     }
   }
   const { id } = await ctx.params
   const deleted = await deleteRecipe(id)
+  // 访问日志：路径带真实 id（删除的是哪道菜可追溯）；403 的路径不带 id（密码还没验过，id 不可信）
+  await appendAccessLog({ ip, method: 'DELETE', path: `/api/recipes/${id}`, status: deleted ? 204 : 404 })
   if (!deleted) {
     return Response.json({ error: '菜谱不存在' }, { status: 404 })
   }

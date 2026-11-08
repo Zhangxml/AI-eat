@@ -13,6 +13,7 @@ import { listRecipes, getRecipe, putRecipe } from '@/lib/recipe-store'
 import { validateRecipe } from '@/lib/recipe-types'
 import type { Recipe } from '@/lib/recipe-types'
 import { requireAuth } from '@/lib/auth'
+import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
 // 顶层结构 schema：只约束「recipes 键存在且为数组」，元素类型 unknown 交由逐条校验，
 // 不加 .strict()——顶层多余字段（如手改文件加的备注键）容忍，不卡死整体
@@ -73,18 +74,22 @@ async function importOne(item: unknown, index: number): Promise<ItemResult> {
 }
 
 // POST /api/backup → 逐条导入 → 200 { imported; skipped; skippedIds; invalidIds } | 400 { error }
+// 访问日志（方案 A）：导入是批量写操作，成功/失败都记录
 export async function POST(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
+  const ip = clientIpOf(req)
   let body: unknown
   try {
     body = await req.json()
   } catch {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/backup', status: 400 })
     return Response.json({ error: '请求体不是合法 JSON' }, { status: 400 })
   }
   // 顶层宽校验：仅 recipes 键存在且为数组，失败即整体 400（顶层结构错误）
   const parsed = backupEnvelopeSchema.safeParse(body)
   if (!parsed.success) {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/backup', status: 400 })
     return Response.json({ error: '备份文件结构非法：缺少 recipes 数组' }, { status: 400 })
   }
 
@@ -103,5 +108,7 @@ export async function POST(req: Request): Promise<Response> {
       else invalidIds.push(r.skipId as string)
     }
   }
+  // 访问日志：导入完成（imported 计数附在路径尾，一眼看出导入规模）
+  await appendAccessLog({ ip, method: 'POST', path: `/api/backup (imported=${imported})`, status: 200 })
   return Response.json({ imported, skipped, skippedIds, invalidIds })
 }

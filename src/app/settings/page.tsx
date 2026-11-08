@@ -6,6 +6,7 @@
 //       GET /api/config → 200 { aiConfigured, baseUrl, model, authEnabled }（绝不含 apiKey）
 // 纯 UI 页无单测（裁定 5），移动端三约束：单列、触摸目标 ≥44px、无横向滚动
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { apiFetch } from '@/lib/api-fetch'
 
 // GET /api/config 响应契约（与 route.ts 一致，绝不含 apiKey 字段）
@@ -247,6 +248,20 @@ export default function SettingsPage() {
               : '未启用（删除仅浏览器确认，无密码校验）。启用：设置 DELETE_ENABLED=true 与 DELETE_PASSWORD 后重启'}
         </p>
       </section>
+
+      {/* 访问记录入口：链接到 /access-logs 列表页（写操作与敏感操作的审计日志） */}
+      <Link
+        href="/access-logs"
+        className="block rounded-xl border border-neutral-200 p-4 transition-colors active:bg-neutral-50 dark:border-neutral-800 dark:active:bg-neutral-900"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">访问记录</span>
+          <span className="shrink-0 text-neutral-400 dark:text-neutral-500">›</span>
+        </div>
+        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+          查看写入、AI 调用与登录尝试等敏感操作记录
+        </p>
+      </Link>
     </main>
   )
 }

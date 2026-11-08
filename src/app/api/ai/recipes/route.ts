@@ -8,6 +8,7 @@ import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, extractRecipeJson } from '
 import { listRecipes } from '@/lib/recipe-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { requireAuth } from '@/lib/auth'
+import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
@@ -71,11 +72,13 @@ function buildUserMessage(input: {
 }
 
 // POST handler：参数校验 → 400；AI 配置 → 503；生成+解析（失败重试一次）→ 200/502
+// 访问日志（方案 A）：AI 调用是成本敏感操作，成功失败都记录（400/502/503/200）
 export async function POST(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
   const input = await parseInput(req)
   if (!input) {
+    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 400 })
     return Response.json({ error: '参数缺失或非法：ingredients 与 dish 至少提供一个，servings 须为正整数' }, { status: 400 })
   }
 
@@ -84,6 +87,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     cfg = loadAiConfig()
   } catch (e) {
+    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 503 })
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
@@ -115,6 +119,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!recipe) {
     // 502 文案带首轮错误详情，便于排查上游异常
     const detail = firstError ? `（${firstError}）` : ''
+    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 502 })
     return Response.json({ error: `AI 输出两次均无法解析为合法菜谱${detail}` }, { status: 502 })
   }
 
@@ -125,6 +130,9 @@ export async function POST(req: Request): Promise<Response> {
   recipe.createdAt = now
   recipe.updatedAt = now
   recipe.source = 'ai'
+
+  // 访问日志：生成成功
+  await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 200 })
 
   // 不写盘：直接返回 recipe，入库由前端 POST /api/recipes 完成
   return Response.json({ recipe })

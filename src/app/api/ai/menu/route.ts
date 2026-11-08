@@ -10,6 +10,7 @@ import { loadAiConfig, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { systemPromptWithLibrary, extractJson } from '@/lib/ai-prompts'
 import { listRecipes } from '@/lib/recipe-store'
 import { requireAuth } from '@/lib/auth'
+import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案，与 Task 10/11 同款）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
@@ -101,11 +102,13 @@ const MENU_FORMAT_RULE = [
 ].join('\n')
 
 // POST handler：参数校验 → 400；AI 配置 → 503；生成+解析（失败重试一次）→ 200/502
+// 访问日志（方案 A）：AI 调用是成本敏感操作，成功失败都记录（400/502/503/200）
 export async function POST(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied
   const input = await parseInput(req)
   if (!input) {
+    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/menu', status: 400 })
     return Response.json(
       { error: '参数缺失或非法：people 须为不小于 1 的整数，preference 须为字符串' },
       { status: 400 },
@@ -117,6 +120,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     cfg = loadAiConfig()
   } catch (e) {
+    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/menu', status: 503 })
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
@@ -148,8 +152,12 @@ export async function POST(req: Request): Promise<Response> {
   if (!menu) {
     // 502 文案带首轮错误详情，便于排查上游异常
     const detail = firstError ? `（${firstError}）` : ''
+    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/menu', status: 502 })
     return Response.json({ error: `AI 输出两次均无法解析为合法菜单${detail}` }, { status: 502 })
   }
+
+  // 访问日志：生成成功
+  await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/menu', status: 200 })
 
   // 不写盘：直接返回菜单与采购清单，入库由前端自行决定
   return Response.json({ dishes: menu.dishes, shopping: menu.shopping })

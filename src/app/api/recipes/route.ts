@@ -3,6 +3,7 @@ import { listRecipes, createRecipe, filterRecipes } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe } from '@/lib/recipe-types'
 import { requireAuth } from '@/lib/auth'
+import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
 // 读取 JSON body 并用 zod 校验为草稿；解析失败或校验失败返回 null
 async function parseDraft(req: Request): Promise<DraftRecipe | null> {
@@ -15,7 +16,7 @@ async function parseDraft(req: Request): Promise<DraftRecipe | null> {
   return validateDraft(body)
 }
 
-// GET /api/recipes?q=&tag= → 200 { recipes, invalidFiles }
+// GET /api/recipes?q=&tag= → 200 { recipes, invalidFiles }（读操作，方案 A 不记日志）
 export async function GET(req: Request) {
   const denied = requireAuth(req)
   if (denied) return denied
@@ -37,6 +38,8 @@ export async function POST(req: Request) {
   const denied = requireAuth(req)
   if (denied) return denied
   const draft = await parseDraft(req)
+  // 访问日志（方案 A：写操作记录；路径不含查询串）。await 但失败已被 access-log 内部吞掉，不影响主流程
+  await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/recipes', status: draft ? 201 : 400 })
   if (!draft) {
     return Response.json({ error: '请求体不是合法的菜谱草稿' }, { status: 400 })
   }
