@@ -16,14 +16,17 @@ const MAX_ITEM_CHARS = 500
 type NutritionInput = { dish?: string; ingredients?: string[]; steps?: string[] }
 
 // 读取并校验输入：dish 与 ingredients 至少一个；数组元素均为非空字符串，数量/长度有上限。
-async function parseInput(req: Request): Promise<NutritionInput | null> {
+// 返回 { input } 或 { error } 以便给出准确的 400 文案（泛化成「至少提供一个」会误导用户）
+type ParseResult = { input: NutritionInput; error?: never } | { input?: never; error: string }
+
+async function parseInput(req: Request): Promise<ParseResult> {
   let body: unknown
   try {
     body = await req.json()
   } catch {
-    return null
+    return { error: '请求体不是合法 JSON' }
   }
-  if (typeof body !== 'object' || body === null) return null
+  if (typeof body !== 'object' || body === null) return { error: '请求体格式非法' }
   const raw = body as Record<string, unknown>
 
   const normalizeList = (value: unknown): string[] | null | undefined => {
@@ -36,16 +39,18 @@ async function parseInput(req: Request): Promise<NutritionInput | null> {
 
   let dish: string | undefined
   if (raw.dish !== undefined) {
-    if (typeof raw.dish !== 'string') return null
+    if (typeof raw.dish !== 'string') return { error: 'dish 须为字符串' }
     const trimmed = raw.dish.trim()
-    if (trimmed.length > MAX_ITEM_CHARS) return null
+    if (trimmed.length > MAX_ITEM_CHARS) return { error: `dish 过长：不超过 ${MAX_ITEM_CHARS} 字符` }
     if (trimmed !== '') dish = trimmed
   }
   const ingredients = normalizeList(raw.ingredients)
   const steps = normalizeList(raw.steps)
-  if (ingredients === null || steps === null) return null
-  if (!dish && !ingredients) return null
-  return { dish, ingredients, steps }
+  // 分别给出具体原因：泛化成「至少提供一个」会误导（dish 明明已提供，实际是数组超限）
+  if (ingredients === null) return { error: `ingredients 非法：最多 ${MAX_ITEMS} 项，每项不超过 ${MAX_ITEM_CHARS} 字符` }
+  if (steps === null) return { error: `steps 非法：最多 ${MAX_ITEMS} 项，每项不超过 ${MAX_ITEM_CHARS} 字符` }
+  if (!dish && !ingredients) return { error: '菜品信息缺失：dish 与 ingredients 至少提供一个' }
+  return { input: { dish, ingredients, steps } }
 }
 
 function buildUserMessage(input: NutritionInput): string {
@@ -75,11 +80,12 @@ export async function POST(req: Request): Promise<Response> {
     await appendAccessLog({ ip, method: 'POST', path: '/api/ai/nutrition', status: 413 })
     return bodyTooLarge()
   }
-  const input = await parseInput(req)
-  if (!input) {
+  const parsed = await parseInput(req)
+  if (parsed.error !== undefined) {
     await appendAccessLog({ ip, method: 'POST', path: '/api/ai/nutrition', status: 400 })
-    return Response.json({ error: '参数缺失或非法：dish 与 ingredients 至少提供一个，数组最多 50 项' }, { status: 400 })
+    return Response.json({ error: parsed.error }, { status: 400 })
   }
+  const input = parsed.input
 
   let cfg
   try {

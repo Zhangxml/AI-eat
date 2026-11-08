@@ -101,11 +101,20 @@ export default function RecipeForm({
   // 食材名非空集合：AI 按钮可用性判断与请求体共用
   const ingredientNames = ingredients.map((r) => r.name.trim()).filter((n) => n !== '')
   // 营养估算用：带上用量（「番茄 2个」与「番茄 500g」营养差一倍，只发名称会明显失真）
+  // 只取「有名称」的行（只有用量没名称的行是半填状态，发过去是噪音）；
+  // 截断到接口上限（最多 50 项、每项 500 字符），避免超长表单把估算请求打成 400
+  const NUTRITION_MAX_ITEMS = 50
+  const NUTRITION_MAX_CHARS = 500
+  const clampItem = (s: string) => (s.length > NUTRITION_MAX_CHARS ? s.slice(0, NUTRITION_MAX_CHARS) : s)
   const ingredientSpecs = ingredients
-    .map((r) => `${r.name.trim()} ${r.amount.trim()}`.trim())
-    .filter((s) => s !== '')
+    .filter((r) => r.name.trim() !== '')
+    .map((r) => clampItem(`${r.name.trim()} ${r.amount.trim()}`.trim()))
+    .slice(0, NUTRITION_MAX_ITEMS)
   // 营养估算用：带上已填步骤（烹饪方式影响油脂与水分）
-  const filledSteps = steps.map((s) => s.trim()).filter((s) => s !== '')
+  const filledSteps = steps
+    .map((s) => clampItem(s.trim()))
+    .filter((s) => s !== '')
+    .slice(0, NUTRITION_MAX_ITEMS)
   // aiBusy 统一三个互斥请求进行中标志（提交/估算/生成）——审计 #14 要求两处共用同一口径，
   // 放在 aiDisabled 之前定义，估算按钮/守卫与生成按钮全部引用（补生成中时估算仍可点的漏洞）
   const aiBusy = submitting || estimating || generating

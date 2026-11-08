@@ -82,6 +82,15 @@ describe('POST /api/ai/nutrition', () => {
     expect(aiCompleteMock).not.toHaveBeenCalled()
   })
 
+  it('steps 超限的 400 文案要指名具体原因（不能误导成「dish 与 ingredients 缺失」）', async () => {
+    const res = await POST(jsonReq({ dish: '番茄炒蛋', steps: Array.from({ length: 51 }, () => '步骤') }))
+    expect(res.status).toBe(400)
+    const msg = ((await res.json()) as { error: string }).error
+    // dish 已提供，文案不得说「至少提供一个」
+    expect(msg).not.toContain('至少提供一个')
+    expect(msg).toMatch(/最多|上限|过长/)
+  })
+
   it('AI 未配置 → 503；两次解析失败 → 502', async () => {
     delete process.env.AI_BASE_URL
     delete process.env.AI_API_KEY

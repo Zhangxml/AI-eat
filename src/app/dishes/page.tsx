@@ -211,6 +211,8 @@ export default function DishesPage() {
   async function saveRecipe(name: string, recipe: Recipe) {
     // 防抖兜底：已入库或请求进行中直接返回（按钮禁用为主，此判断防极端连点）
     if (savedNames[name] || savingNames[name]) return
+    // 记录发起时的菜单代次：期间若重新点菜，201 返回后不应把「已入库」标到新菜单的同名菜上
+    const requestEpoch = menuEpochRef.current.value
     setSavingNames((prev) => ({ ...prev, [name]: true }))
     try {
       const res = await apiFetch('/api/recipes', {
@@ -219,6 +221,7 @@ export default function DishesPage() {
         body: JSON.stringify(toDraft(recipe)),
       })
       if (res.status === 201) {
+        if (menuEpochRef.current.isStale(requestEpoch)) return
         setSavedNames((prev) => ({ ...prev, [name]: true }))
         return
       }
