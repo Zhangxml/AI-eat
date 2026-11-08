@@ -42,8 +42,11 @@ describe('systemPromptWithLibrary 库摘要注入', () => {
     expect(prompt).toContain('番茄炒蛋｜食材:番茄,鸡蛋')
     expect(prompt).toContain('青椒肉丝｜食材:青椒,猪肉')
   })
-  it('中文人设且鼓励优先推荐库中已有菜', () => {
-    expect(systemPromptWithLibrary([recipeFixture])).toContain('优先推荐')
+  it('菜谱库仅作防重复参考，不再要求优先推荐已有菜', () => {
+    const prompt = systemPromptWithLibrary([recipeFixture])
+    expect(prompt).toContain('不必优先推荐库中已有的菜')
+    expect(prompt).toContain('有新意的搭配')
+    expect(prompt).not.toContain('推荐时优先推荐菜谱库中已有的菜')
   })
 })
 

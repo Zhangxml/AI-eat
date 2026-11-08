@@ -1,7 +1,7 @@
 // POST /api/ai/menu：AI 点菜接口（Task 13，设计 5.2）
 // 契约：body { people: number; preference?: string }（people 必填 ≥1 整数，preference 可选口味偏好）
 // → 200 { dishes: { name; category: '荤菜'|'素菜'|'汤'|'主食'|'其他'; reason }[]; shopping: string[] }
-//   （zod schema 轻量校验，不含步骤；菜单构成考虑人数与荤素搭配，优先推荐库中已有菜并在 reason 标注）
+//   （zod schema 轻量校验，不含步骤；菜单构成考虑人数/荤素搭配/创意方向，库摘要仅防完全重复）
 // | 400 { error }（people 缺失/非法）| 503 { error }（AI 未配置，loadAiConfig throw）
 // | 502 { error: 'AI 输出两次均无法解析…' }（第一次解析失败重试一次，仍失败才 502，模式与 Task 10 一致）
 // 说明：menu 的 zod schema 仅本接口单一消费者，放在 route 文件内，不独立 lib
@@ -13,6 +13,8 @@ import type { Recipe } from '@/lib/recipe-types'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
+import { resolveTemperature } from '@/lib/ai-temperatures'
+import { pickInspiration } from '@/lib/inspiration'
 
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案，与 Task 10/11 同款）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
@@ -73,7 +75,8 @@ async function parseInput(
   return { people: b.people, preference }
 }
 
-// 组装用户消息：人数（含份量级提示：people≥4 建议菜数不少于人数）、口味偏好、荤素搭配、库中已有菜优先强调
+// 组装用户消息：人数（含份量级提示：people≥4 建议菜数不少于人数）、口味偏好、荤素搭配、创意约束 + 灵感方向。
+// 说明：已移除「菜谱库已有菜优先」要求（产品决定）——菜单追求新意，不因库中已有而优先复用。
 function buildUserMessage(input: { people: number; preference?: string }): string {
   const parts: string[] = [`今天 ${input.people} 人吃饭`]
   // 份量级提示：人数多时建议菜数水涨船高，避免 AI 只给两三道
@@ -84,8 +87,9 @@ function buildUserMessage(input: { people: number; preference?: string }): strin
     parts.push(`口味偏好：${input.preference}`)
   }
   parts.push('请注意荤素搭配，合理组合荤菜、素菜、汤和主食')
-  // 库中已有菜优先（与系统提示词的库摘要呼应，测试断言依赖此文案）
-  parts.push('菜谱库中已有的菜优先考虑，并在推荐理由中注明「已有菜谱」')
+  // 创意约束：避免总推荐最常见的大路菜
+  parts.push('菜单要有新意：避免番茄炒蛋、青椒肉丝、麻婆豆腐、土豆丝等最常见的大路菜，同等条件下优先更有特色的搭配')
+  parts.push(pickInspiration())
   return parts.join('；') + '。'
 }
 
@@ -100,7 +104,7 @@ const MENU_FORMAT_RULE = [
   '}',
   'dishes 至少一道；category 只能取 荤菜/素菜/汤/主食/其他 之一；shopping 为合并去重后的采购清单。',
   '完整示例（2 人餐）：',
-  '<menu>{"dishes":[{"name":"番茄炒蛋","category":"荤菜","reason":"家常下饭，已有菜谱"},{"name":"清炒油麦菜","category":"素菜","reason":"清爽解腻"}],"shopping":["番茄 x2","鸡蛋 x3","油麦菜 x1把"]}</menu>',
+  '<menu>{"dishes":[{"name":"番茄炒蛋","category":"荤菜","reason":"家常下饭，酸甜开胃"},{"name":"清炒油麦菜","category":"素菜","reason":"清爽解腻"}],"shopping":["番茄 x2","鸡蛋 x3","油麦菜 x1把"]}</menu>',
 ].join('\n')
 
 // POST handler：参数校验 → 400；AI 配置 → 503；生成+解析（失败重试一次）→ 200/502
@@ -142,12 +146,14 @@ export async function POST(req: Request): Promise<Response> {
     content: [systemPromptWithLibrary(recipes), MENU_FORMAT_RULE].join('\n'),
   }
   const baseUser: ChatMessage = { role: 'user', content: buildUserMessage(input) }
+  // 温度分层：一桌菜单是轻量结构，0.8 略偏创意；解析失败仍有一次重试兜底
+  const aiOptions = { temperature: resolveTemperature('menu') }
 
   // 第一次调用；解析失败（含上游异常）则附重试提示再调一次，两次都失败才 502
   let firstError: string | null = null
   let menu: z.infer<typeof menuSchema> | null = null
   try {
-    menu = extractMenuJson(await aiComplete(cfg, [system, baseUser]))
+    menu = extractMenuJson(await aiComplete(cfg, [system, baseUser], aiOptions))
   } catch (e) {
     firstError = e instanceof Error ? e.message : String(e)
   }
@@ -155,7 +161,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!menu) {
     const retryUser: ChatMessage = { ...baseUser, content: `${baseUser.content}${RETRY_HINT}` }
     try {
-      menu = extractMenuJson(await aiComplete(cfg, [system, retryUser]))
+      menu = extractMenuJson(await aiComplete(cfg, [system, retryUser], aiOptions))
     } catch (e) {
       firstError = e instanceof Error ? e.message : String(e)
     }

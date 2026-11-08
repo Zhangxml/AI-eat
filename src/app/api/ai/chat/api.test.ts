@@ -100,7 +100,16 @@ function parseSse(text: string): SseFrame[] {
 }
 
 // 需要接管并在 afterEach 恢复的环境变量
-const ENV_KEYS = ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_EAT_DATA_DIR'] as const
+const ENV_KEYS = [
+  'AI_BASE_URL',
+  'AI_API_KEY',
+  'AI_MODEL',
+  'AI_EAT_DATA_DIR',
+  'AI_TEMP_CHAT',
+  'AI_TEMP_MENU',
+  'AI_TEMP_RECIPE',
+  'AI_TEMP_NUTRITION',
+] as const
 
 describe('POST /api/ai/chat', () => {
   let dir: string
@@ -108,6 +117,11 @@ describe('POST /api/ai/chat', () => {
 
   beforeEach(async () => {
     savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
+    // 隔离本地 .env 的温度覆盖，保证断言的是代码默认值
+    delete process.env.AI_TEMP_CHAT
+    delete process.env.AI_TEMP_MENU
+    delete process.env.AI_TEMP_RECIPE
+    delete process.env.AI_TEMP_NUTRITION
     dir = await fs.mkdtemp('/tmp/opencode/ai-eat-chat-api-')
     process.env.AI_EAT_DATA_DIR = dir
     // AI 配置默认给全（真实 loadAiConfig 可通过）；503 用例里再清空
@@ -148,6 +162,8 @@ describe('POST /api/ai/chat', () => {
     const sent = aiChatStreamMock.mock.calls[0][1] as ChatMessage[]
     expect(sent[0].role).toBe('system')
     expect(sent[0].content.length).toBeGreaterThan(0)
+    expect(sent[0].content).toContain('本次灵感方向')
+    expect(aiChatStreamMock.mock.calls[0][2]).toEqual({ temperature: 0.7 })
     expect(sent.slice(1)).toEqual([{ role: 'user', content: '今天吃什么' }])
   })
 

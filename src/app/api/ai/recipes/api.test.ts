@@ -55,7 +55,16 @@ const jsonReq = (body: unknown) =>
   })
 
 // 需要接管并在 afterEach 恢复的环境变量
-const ENV_KEYS = ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_EAT_DATA_DIR'] as const
+const ENV_KEYS = [
+  'AI_BASE_URL',
+  'AI_API_KEY',
+  'AI_MODEL',
+  'AI_EAT_DATA_DIR',
+  'AI_TEMP_CHAT',
+  'AI_TEMP_MENU',
+  'AI_TEMP_RECIPE',
+  'AI_TEMP_NUTRITION',
+] as const
 
 // 成功响应形态（断言用局部类型，避免全文硬编码比较）
 interface AiRecipeResponse {
@@ -71,6 +80,11 @@ describe('POST /api/ai/recipes', () => {
 
   beforeEach(async () => {
     savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
+    // 隔离本地 .env 的温度覆盖，保证断言的是代码默认值
+    delete process.env.AI_TEMP_CHAT
+    delete process.env.AI_TEMP_MENU
+    delete process.env.AI_TEMP_RECIPE
+    delete process.env.AI_TEMP_NUTRITION
     dir = await fs.mkdtemp('/tmp/opencode/ai-eat-ai-api-')
     process.env.AI_EAT_DATA_DIR = dir
     // AI 配置默认给全（真实 loadAiConfig 可通过）；503 用例里再清空
@@ -117,6 +131,9 @@ describe('POST /api/ai/recipes', () => {
     expect(userMsg.content).toContain('番茄')
     expect(userMsg.content).toContain('鸡蛋')
     expect(userMsg.content).toContain('2 人份')
+    // 食材模式注入本次灵感（缓解固定搭配）；完整菜谱温度固定 0.7
+    expect(userMsg.content).toContain('本次灵感方向')
+    expect(aiCompleteMock.mock.calls[0][2]).toEqual({ temperature: 0.7 })
   })
 
   it('解析失败自动重试一次：第二次用户消息附「上次输出无法解析，请严格按格式重发」', async () => {
@@ -153,6 +170,16 @@ describe('POST /api/ai/recipes', () => {
     expect(error).toContain('AI 上游请求失败：HTTP 500')
     expect(aiCompleteMock).toHaveBeenCalledTimes(2)
     expect(createRecipeMock).not.toHaveBeenCalled()
+  })
+
+  it('按菜名生成时不注入灵感种子，避免把明确菜名带偏', async () => {
+    aiCompleteMock.mockResolvedValueOnce(aiOk)
+    const res = await POST(jsonReq({ dish: '红烧鱼' }))
+    expect(res.status).toBe(200)
+    const userMsg = aiCompleteMock.mock.calls[0][1][1]
+    expect(userMsg.content).toContain('红烧鱼')
+    expect(userMsg.content).not.toContain('本次灵感方向')
+    expect(aiCompleteMock.mock.calls[0][2]).toEqual({ temperature: 0.7 })
   })
 
   it('ingredients 与 dish 均缺省 → 400（含类型非法与非 JSON body）', async () => {

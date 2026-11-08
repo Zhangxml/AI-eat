@@ -10,6 +10,8 @@
 // 在 pump 循环结束后统一处理，比 transform/flush 同步回调里排异步任务更可控，且便于接入 request.signal 取消
 import { loadAiConfig, aiChatStream, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { systemPromptWithLibrary, RECIPE_FORMAT_RULE, CHAT_MENU_FORMAT_RULE, extractRecipeJson, extractChatMenuJson } from '@/lib/ai-prompts'
+import { resolveTemperature } from '@/lib/ai-temperatures'
+import { pickInspiration } from '@/lib/inspiration'
 import { listRecipes } from '@/lib/recipe-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
@@ -248,8 +250,7 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
-  // 系统消息 = 人设 + 库摘要 + 输出规则（<recipe> 菜谱格式 + <menu> 食材推荐清单格式，两态并存）；
-  // 其后原样转发客户端 messages；菜谱库读取失败（权限等）→ 500 中文（审计修复 #8）
+  // 菜谱库读取：非 ENOENT 故障（权限等）→ 500 中文（审计修复 #8）
   let recipes: Recipe[]
   try {
     recipes = (await listRecipes()).recipes
@@ -257,17 +258,24 @@ export async function POST(req: Request): Promise<Response> {
     await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 500 })
     return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
   }
+  // 系统消息 = 人设 + 库摘要（仅防重复参考）+ 输出规则（<recipe>/<menu> 两态并存）+ 本次灵感方向；
+  // 其后原样转发客户端 messages
+  const inspiration = `${pickInspiration()}（若用户请求推荐或搭配，可优先尝试该灵感方向，合理范围内即可、不必硬套；若用户明确指定菜名，则严格按指定菜名生成。）`
   const sent: ChatMessage[] = [
     {
       role: 'system',
-      content: [systemPromptWithLibrary(recipes), RECIPE_FORMAT_RULE, CHAT_MENU_FORMAT_RULE].join('\n'),
+      content: [systemPromptWithLibrary(recipes), RECIPE_FORMAT_RULE, CHAT_MENU_FORMAT_RULE, inspiration].join(
+        '\n',
+      ),
     },
     ...messages,
   ]
+  // 温度分层：聊天固定 0.7（同一端点可能直出菜谱，需保护 JSON 解析成功率；创意靠提示词+灵感种子）
+  const aiOptions = { temperature: resolveTemperature('chat') }
 
   let upstream: Response
   try {
-    upstream = await aiChatStream(cfg, sent)
+    upstream = await aiChatStream(cfg, sent, aiOptions)
   } catch (e) {
     // 上游非 2xx（aiChatStream throw）：此时尚未发出任何 SSE 字节，可直接回 JSON 错误（与 Task 10 的 502 一致）
     await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 502 })
@@ -342,7 +350,7 @@ export async function POST(req: Request): Promise<Response> {
               let menu = extractChatMenuJson(pending.content)
               if (!menu) {
                 try {
-                  menu = extractChatMenuJson(await aiComplete(cfg, buildRetryMessages(sent)))
+                  menu = extractChatMenuJson(await aiComplete(cfg, buildRetryMessages(sent), aiOptions))
                 } catch {
                   menu = null
                 }
@@ -359,7 +367,7 @@ export async function POST(req: Request): Promise<Response> {
               let recipe = extractRecipeJson(pending.content)
               if (!recipe) {
                 try {
-                  recipe = extractRecipeJson(await aiComplete(cfg, buildRetryMessages(sent)))
+                  recipe = extractRecipeJson(await aiComplete(cfg, buildRetryMessages(sent), aiOptions))
                 } catch {
                   recipe = null
                 }

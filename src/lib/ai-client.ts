@@ -3,6 +3,7 @@
 // - aiComplete：非流式，返回 choices[0].message.content
 // - aiChatStream：stream:true，返回原始上游 Response（OpenAI SSE 格式由调用方解析）
 // - fetch 带 AbortSignal.timeout(120s)：上游 120 秒无响应即中止，错误消息含「AI 上游超时」
+// - 可选 options.temperature：温度分层（见 ai-temperatures.ts），clamp [0,1] 后随请求发送
 // 不引 SDK，直接 fetch；不透传除 Authorization/Content-Type 外的其他敏感头
 
 export interface ChatMessage {
@@ -14,6 +15,11 @@ export interface AiConfig {
   baseUrl: string
   apiKey: string
   model: string
+}
+
+// 单次调用可选项（当前只有温度；后续如需 top_p/max_tokens 在此扩展）
+export interface AiCallOptions {
+  temperature?: number
 }
 
 // 配置缺失的统一中文错误（T10/T11/T13 依赖此文案）
@@ -40,7 +46,15 @@ async function chatRequest(
   cfg: AiConfig,
   messages: ChatMessage[],
   stream: boolean,
+  opts?: AiCallOptions,
 ): Promise<Response> {
+  // 温度：仅当调用方提供有限数时发送（clamp 到 [0,1]）；未提供则交由供应商默认
+  const temperature =
+    opts?.temperature !== undefined && Number.isFinite(opts.temperature)
+      ? Math.min(1, Math.max(0, opts.temperature))
+      : undefined
+  const body: Record<string, unknown> = { model: cfg.model, messages, stream }
+  if (temperature !== undefined) body.temperature = temperature
   let res: Response
   try {
     res = await fetch(chatEndpoint(cfg.baseUrl), {
@@ -49,7 +63,7 @@ async function chatRequest(
         Authorization: `Bearer ${cfg.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ model: cfg.model, messages, stream }),
+      body: JSON.stringify(body),
       // 120 秒硬超时：到时 fetch 以 TimeoutError（DOMException）reject，走下方超时翻译
       signal: AbortSignal.timeout(AI_TIMEOUT_MS),
     })
@@ -67,8 +81,12 @@ async function chatRequest(
   return res
 }
 
-export async function aiComplete(cfg: AiConfig, messages: ChatMessage[]): Promise<string> {
-  const res = await chatRequest(cfg, messages, false)
+export async function aiComplete(
+  cfg: AiConfig,
+  messages: ChatMessage[],
+  opts?: AiCallOptions,
+): Promise<string> {
+  const res = await chatRequest(cfg, messages, false, opts)
   const data = await res.json()
   // OpenAI 兼容响应：choices[0].message.content
   const content = data.choices?.[0]?.message?.content
@@ -78,6 +96,10 @@ export async function aiComplete(cfg: AiConfig, messages: ChatMessage[]): Promis
   return content
 }
 
-export async function aiChatStream(cfg: AiConfig, messages: ChatMessage[]): Promise<Response> {
-  return chatRequest(cfg, messages, true)
+export async function aiChatStream(
+  cfg: AiConfig,
+  messages: ChatMessage[],
+  opts?: AiCallOptions,
+): Promise<Response> {
+  return chatRequest(cfg, messages, true, opts)
 }

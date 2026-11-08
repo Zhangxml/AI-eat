@@ -46,8 +46,15 @@ function StepTextarea({ value, idx, onChange }: { value: string; idx: number; on
   )
 }
 
-// AI 估算接口契约（Task 10 提供）：POST /api/ai/recipes → 200 { recipe } | 503 { error }
-interface AiEstimateResponse {
+// 独立营养估算接口契约：POST /api/ai/nutrition → 200 { nutrition } | 503 { error }
+// 不再为拿营养生成整份菜谱：更快、更省，且温度 0.5 更稳定。
+interface AiNutritionResponse {
+  nutrition?: Nutrition
+}
+
+// 整份菜谱生成接口契约：POST /api/ai/recipes → 200 { recipe } | 503 { error }
+// AI 生成按钮仍用该接口，回填全部表单字段但不自动保存。
+interface AiRecipeResponse {
   recipe?: Recipe
 }
 
@@ -208,14 +215,14 @@ export default function RecipeForm({
     }
   }
 
-  // AI 估算营养（裁定 3）：调 POST /api/ai/recipes，取 recipe.nutrition 回填四项
+  // AI 估算营养：调独立 POST /api/ai/nutrition（温度 0.5），仅取营养数据回填四项。
   async function handleEstimate() {
     // ASI 修复：return 必须独占一行——原写法 `if (aiDisabled) return    setEstimating(true)`
     // 会被解析为 `return setEstimating(true)`，aiDisabled 时 setEstimating 永不执行反而被当返回值
     if (aiDisabled) return
     setEstimating(true)
     try {
-      const res = await apiFetch('/api/ai/recipes', {
+      const res = await apiFetch('/api/ai/nutrition', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dish: name.trim(), ingredients: ingredientNames }),
@@ -237,8 +244,8 @@ export default function RecipeForm({
         alert(msg)
         return
       }
-      const data = (await res.json()) as AiEstimateResponse
-      const n = data.recipe?.nutrition
+      const data = (await res.json()) as AiNutritionResponse
+      const n = data.nutrition
       if (!n) {
         alert('AI 未返回营养数据')
         return
@@ -284,7 +291,7 @@ export default function RecipeForm({
         alert(msg)
         return
       }
-      const data = (await res.json()) as AiEstimateResponse
+      const data = (await res.json()) as AiRecipeResponse
       const r = data.recipe
       if (!r) {
         alert('AI 未返回菜谱数据')

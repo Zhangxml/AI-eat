@@ -83,6 +83,19 @@ describe('AI 客户端', () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).body).toContain('"stream":true')
   })
 
+  it('调用方传温度时请求体透传，且统一 clamp 到 [0,1]', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(okResponse({ choices: [{ message: { content: 'x' } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await aiComplete(cfg, [{ role: 'user', content: 'hi' }], { temperature: 0.7 })
+    await aiComplete(cfg, [{ role: 'user', content: 'hi' }], { temperature: 1.8 })
+    await aiComplete(cfg, [{ role: 'user', content: 'hi' }], { temperature: -0.2 })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).temperature).toBe(0.7)
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string).temperature).toBe(1)
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body as string).temperature).toBe(0)
+  })
+
   it('baseUrl 末尾斜杠归一化：带斜杠与不带斜杠拼出同一端点', async () => {
     const fetchMock = vi
       .fn()

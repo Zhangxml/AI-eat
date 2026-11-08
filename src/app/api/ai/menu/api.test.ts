@@ -21,7 +21,7 @@ import type { Recipe } from '@/lib/recipe-types'
 const aiCompleteMock = vi.mocked(aiComplete)
 const listRecipesMock = vi.mocked(listRecipes)
 
-// 库中已有菜（验证系统提示词注入库摘要 + 用户消息强调「已有菜谱」优先）
+// 库中已有菜（验证系统提示词注入库摘要；不再有「优先推荐已有菜」要求）
 const libRecipe: Recipe = {
   id: 'r-1730000000-ab12cd',
   name: '番茄炒蛋',
@@ -46,7 +46,7 @@ const aiMenu = {
   dishes: [
     { name: '红烧排骨', category: '荤菜', reason: '经典硬菜，下饭' },
     { name: '蒜蓉西兰花', category: '素菜', reason: '解腻均衡' },
-    { name: '番茄蛋汤', category: '汤', reason: '库中已有的菜优先考虑' },
+    { name: '番茄蛋汤', category: '汤', reason: '酸甜开胃，清爽解腻' },
   ],
   shopping: ['排骨 x1斤', '西兰花 x1颗', '番茄 x2'],
 }
@@ -61,7 +61,16 @@ const jsonReq = (body: unknown) =>
   })
 
 // 需要接管并在 afterEach 恢复的环境变量
-const ENV_KEYS = ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_EAT_DATA_DIR'] as const
+const ENV_KEYS = [
+  'AI_BASE_URL',
+  'AI_API_KEY',
+  'AI_MODEL',
+  'AI_EAT_DATA_DIR',
+  'AI_TEMP_CHAT',
+  'AI_TEMP_MENU',
+  'AI_TEMP_RECIPE',
+  'AI_TEMP_NUTRITION',
+] as const
 
 // 响应形态（断言用局部类型，避免全文硬编码比较）
 interface MenuResponse {
@@ -78,6 +87,11 @@ describe('POST /api/ai/menu', () => {
 
   beforeEach(async () => {
     savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
+    // 隔离本地 .env 的温度覆盖，保证断言的是代码默认值
+    delete process.env.AI_TEMP_CHAT
+    delete process.env.AI_TEMP_MENU
+    delete process.env.AI_TEMP_RECIPE
+    delete process.env.AI_TEMP_NUTRITION
     dir = await fs.mkdtemp('/tmp/opencode/ai-eat-menu-api-')
     process.env.AI_EAT_DATA_DIR = dir
     // AI 配置默认给全（真实 loadAiConfig 可通过）；503 用例里再清空
@@ -96,7 +110,7 @@ describe('POST /api/ai/menu', () => {
     await fs.rm(dir, { recursive: true, force: true })
   })
 
-  it('返回 dishes 与 shopping 且经 schema 校验（轻量无步骤，库摘要与已有菜谱强调进提示词）', async () => {
+  it('返回 dishes 与 shopping 且经 schema 校验（轻量无步骤，库摘要仅供参考、菜单强调创意）', async () => {
     aiCompleteMock.mockResolvedValueOnce(aiOk)
     const res = await POST(jsonReq({ people: 3, preference: '清淡' }))
     expect(res.status).toBe(200)
@@ -115,12 +129,17 @@ describe('POST /api/ai/menu', () => {
     expect(sysMsg.role).toBe('system')
     expect(sysMsg.content).toContain('<menu>')
     expect(sysMsg.content).toContain('番茄炒蛋｜食材:番茄,鸡蛋')
-    // 用户消息含人数 / 偏好 / 荤素搭配 / 已有菜谱优先强调
+    // 用户消息含人数 / 偏好 / 荤素搭配 / 创意约束 + 每次随机灵感方向；不再要求优先已有菜
     expect(userMsg.role).toBe('user')
     expect(userMsg.content).toContain('3 人')
     expect(userMsg.content).toContain('清淡')
     expect(userMsg.content).toContain('荤素搭配')
-    expect(userMsg.content).toContain('已有菜谱')
+    expect(userMsg.content).toContain('避免番茄炒蛋')
+    expect(userMsg.content).toContain('本次灵感方向')
+    expect(userMsg.content).not.toContain('已有菜谱')
+    expect(userMsg.content).not.toContain('优先考虑')
+    // 温度分层：买什么菜单固定 0.8（环境变量未覆盖）
+    expect(aiCompleteMock.mock.calls[0][2]).toEqual({ temperature: 0.8 })
   })
 
   it('people=4 时用户消息附份量级提示（建议菜数不少于 4 道）', async () => {

@@ -58,7 +58,9 @@ docker compose down
 | `AI_BASE_URL` | 否 | AI 供应商 OpenAI 兼容接口地址（如 `https://api.example.com/v1`） |
 | `AI_API_KEY` | 否 | AI 供应商 API Key，仅服务端读取，任何接口不会回显 |
 | `AI_MODEL` | 否 | 模型名（按供应商填写，如 `deepseek-chat`） |
+| `AI_TEMP_CHAT` / `AI_TEMP_MENU` / `AI_TEMP_RECIPE` / `AI_TEMP_NUTRITION` | 否 | AI 温度分层覆盖：默认 0.7 / 0.8 / 0.7 / 0.5；非法值自动回落并限制在 0~1 |
 | `PASSWORD` | 否 | 访问口令；非空即启用登录鉴权，留空免登录 |
+| `DELETE_ENABLED` + `DELETE_PASSWORD` | 否 | 两者同时满足时启用删除密码保护 |
 | `AI_EAT_DATA_DIR` | 否 | 菜谱数据目录（默认 `<项目目录>/data/recipes`）；裸机无需设置，Docker 部署由 compose 固定注入 |
 
 三项 AI 配置（`AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL`）齐备时 AI 功能可用；缺省时应用仍可正常使用手动菜谱、备份等本地功能，仅 AI 生成与点菜不可用。设置页（`/settings`）可查看当前配置状态。

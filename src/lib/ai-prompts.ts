@@ -1,6 +1,6 @@
 // AI 提示词组装与结构化输出解析（Task 9，设计 5.2/5.3）
 // 被 T10/T11/T13 三个 AI 接口消费：
-// - systemPromptWithLibrary：中文人设 + 菜谱库摘要注入，让 AI 优先推荐库中已有菜
+// - systemPromptWithLibrary：中文人设 + 库摘要注入（仅防完全重复，不设已有菜优先级）
 // - RECIPE_FORMAT_RULE：结构化输出格式约束（<recipe>{完整JSON}</recipe>），内嵌 5.3 番茄炒蛋示例
 // - extractJson：平衡花括号扫描取首个完整 {...} 段（不用正则贪婪匹配——嵌套对象会出错）
 // - extractRecipeJson：extractJson + validateRecipe，三形态（标签/栅栏/裸 JSON）均可解
@@ -74,11 +74,12 @@ export function extractChatMenuJson(text: string): ChatMenu | null {
   return null
 }
 
-// 系统提示词：人设部分自拟（中文、AI 菜谱助手、鼓励优先推荐库中已有菜）+ 库摘要段
+// 系统提示词：人设 + 库摘要段（仅作防重复参考，不设优先级）+ 创意约束
 export function systemPromptWithLibrary(recipes: Recipe[]): string {
   const lines: string[] = [
     '你是一个中餐家常菜 AI 菜谱助手，专门帮助用户解决「今天吃什么」的问题：可以按现有食材生成菜谱、',
     '根据人数和口味点菜搭配、回答烹饪相关问题。回答要实用、口语化，步骤清晰可操作。',
+    '推荐时尽量给出有新意的搭配，避免总用最常见的大路菜；同一食材可以尝试不同做法。',
   ]
   if (recipes.length === 0) {
     lines.push('菜谱库为空。', '你生成的菜谱后续会被用户存入菜谱库。')
@@ -87,7 +88,7 @@ export function systemPromptWithLibrary(recipes: Recipe[]): string {
   lines.push(
     '用户有一个菜谱库，里面已有的菜如下（格式：名称｜食材:食材名列表）：',
     ...recipes.map(r => `${r.name}｜食材:${r.ingredients.map(i => i.name).join(',')}`),
-    '推荐时优先推荐菜谱库中已有的菜，不要重复生成库里已经有的菜谱；只有当库中没有合适的菜时才生成新菜谱。',
+    '以上清单仅供参考：避免推荐与库中完全相同的菜即可，不必优先推荐库中已有的菜。',
   )
   return lines.join('\n')
 }
@@ -128,9 +129,20 @@ export const CHAT_MENU_FORMAT_RULE = [
   '  标签内为 JSON（不要在 JSON 外再加其他文字），最后以 </menu> 结束。JSON 格式：',
   '  {"dishes":[{"name":"<菜名>","ingredient":"<该菜主要使用的食材>","reason":"<推荐理由，一两句话>"}]}',
   '  dishes 的数量与用户给出的食材数量一致：每道菜以一种食材为主角，一种食材对应一道菜。',
+  '  为每种食材给出不常见但有依据的做法（例如番茄可做番茄炖牛腩/番茄啫啫煲，而不只是番茄炒蛋）；',
+  '  避免与对话历史中已推荐过的菜重复。',
   '  清单阶段不要生成完整菜谱（不要输出 <recipe> 标签），等用户确认想做哪道后再生成。',
   '- 当用户询问烹饪知识、技巧、或与食材推荐无关的闲聊时：正常文字回答，不输出 <menu> 标签。',
   '- 当用户明确要求生成某道菜的完整做法/菜谱时：正常输出 <recipe> 标签（按下方菜谱格式规则）。',
+].join('\n')
+
+// 营养估算格式规则（/api/ai/nutrition 专用，温度 0.5 求稳）：
+// 只输出 <nutrition> 标签包裹的 JSON，字段与 recipe-types 的 nutritionSchema 一致（estimated 恒 true）
+export const NUTRITION_FORMAT_RULE = [
+  '输出格式强制要求：只输出一个 <nutrition> 标签，标签内为 JSON（不要在 JSON 外再加其他文字），最后以 </nutrition> 结束。',
+  'JSON 字段模板：',
+  '{"caloriesKcal":<千卡>,"proteinG":<克>,"fatG":<克>,"carbG":<克>,"estimated":true}',
+  '其中 "estimated" 恒为 true（营养为估算值，非实测）；四项数值均为非负数。',
 ].join('\n')
 
 // 平衡花括号扫描：从 from 开始找第一个 {，逐字符（UTF-16 码元）扫描并统计嵌套深度，
@@ -167,15 +179,17 @@ function balancedJsonSegment(text: string, from: number): string | null {
 }
 
 // 从 AI 输出文本中依次尝试三种形态提取首个 {...} 段（优先级：标签 > 栅栏 > 全文扫描），逐段交给 parse，任一成功即返回：
-// 1. <recipe>...</recipe> 标签内
+// 1. <recipe>...</recipe> / <nutrition>...</nutrition> 标签内（菜单有独立字段 schema，走 extractChatMenuJson）
 // 2. markdown 代码栅栏（```json 或 ```）内
 // 3. 全文平衡扫描（容忍前后杂文本）
 // 某段 parse 失败（返回 null）则继续尝试下一段，全部失败返回 null
 export function extractJson<T>(text: string, parse: (s: string) => T | null): T | null {
   const candidates: string[] = []
-  // 形态 1：<recipe> 标签（多次出现时每个标签段都作为候选，按出现顺序）
-  const tagRe = /<recipe>([\s\S]*?)<\/recipe>/g
-  for (const m of text.matchAll(tagRe)) candidates.push(m[1])
+  // 形态 1：<recipe>/<nutrition> 标签（多次出现时每个标签段都作为候选，按出现顺序）
+  for (const tag of ['recipe', 'nutrition']) {
+    const tagRe = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g')
+    for (const m of text.matchAll(tagRe)) candidates.push(m[1])
+  }
   // 形态 2：代码栅栏（``` 或 ```json 等语言标记，非贪婪取每个栅栏块）
   const fenceRe = /```[^\n`]*\n([\s\S]*?)```/g
   for (const m of text.matchAll(fenceRe)) candidates.push(m[1])

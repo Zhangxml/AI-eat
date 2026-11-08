@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { randomBytes } from 'node:crypto'
 
 // 营养信息：estimated 恒为字面量 true（AI 估算，非实测）
-const nutritionSchema = z
+export const nutritionSchema = z
   .object({
     caloriesKcal: z.number(),
     proteinG: z.number(),
@@ -58,6 +58,12 @@ export function validateRecipe(input: unknown): Recipe | null {
 // 校验草稿（不含 id/时间戳），失败返回 null
 export function validateDraft(input: unknown): DraftRecipe | null {
   const result = draftRecipeSchema.safeParse(input)
+  return result.success ? result.data : null
+}
+
+// 营养独立接口复用：只校验四项估算值，不需要生成完整菜谱。
+export function validateNutrition(input: unknown): Nutrition | null {
+  const result = nutritionSchema.safeParse(input)
   return result.success ? result.data : null
 }
 

@@ -10,6 +10,8 @@ import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
+import { resolveTemperature } from '@/lib/ai-temperatures'
+import { pickInspiration } from '@/lib/inspiration'
 
 // 重试提示（第二次请求附在用户消息后；测试断言依赖此文案）
 const RETRY_HINT = '上次输出无法解析，请严格按格式重发'
@@ -107,13 +109,17 @@ export async function POST(req: Request): Promise<Response> {
     role: 'system',
     content: [systemPromptWithLibrary(recipes), RECIPE_FORMAT_RULE].join('\n'),
   }
-  const baseUser: ChatMessage = { role: 'user', content: buildUserMessage(input) }
+  // 有食材、未指定菜名时才加灵感种子：帮助跳出固定搭配；用户明确指定菜名时严格按菜名生成，不跑偏。
+  const inspiration = input.ingredients && !input.dish ? `；${pickInspiration()}（合理范围内参考，不必硬套）` : ''
+  const baseUser: ChatMessage = { role: 'user', content: `${buildUserMessage(input)}${inspiration}` }
+  // 温度分层：完整菜谱字段多，固定 0.7 优先保证结构化 JSON 成功率。
+  const aiOptions = { temperature: resolveTemperature('recipe') }
 
   // 第一次调用；解析失败（含上游异常）则附重试提示再调一次，两次都失败才 502
   let firstError: string | null = null
   let recipe: Recipe | null = null
   try {
-    recipe = extractRecipeJson(await aiComplete(cfg, [system, baseUser]))
+    recipe = extractRecipeJson(await aiComplete(cfg, [system, baseUser], aiOptions))
   } catch (e) {
     firstError = e instanceof Error ? e.message : String(e)
   }
@@ -121,7 +127,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!recipe) {
     const retryUser: ChatMessage = { ...baseUser, content: `${baseUser.content}${RETRY_HINT}` }
     try {
-      recipe = extractRecipeJson(await aiComplete(cfg, [system, retryUser]))
+      recipe = extractRecipeJson(await aiComplete(cfg, [system, retryUser], aiOptions))
     } catch (e) {
       firstError = e instanceof Error ? e.message : String(e)
     }

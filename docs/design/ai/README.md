@@ -1,7 +1,7 @@
 # 模块：AI 接入（ai-client + ai-prompts）
 
 > 代码位置：`src/lib/ai-client.ts`（供应商调用）、`src/lib/ai-prompts.ts`（提示词与输出解析）
-> 消费方：三个 AI 接口 `/api/ai/recipes`、`/api/ai/chat`、`/api/ai/menu`
+> 消费方：四个 AI 接口 `/api/ai/recipes`、`/api/ai/chat`、`/api/ai/menu`、`/api/ai/nutrition`
 
 ## 做什么
 
@@ -19,6 +19,12 @@
 AI_BASE_URL=https://api.deepseek.com/v1   # OpenAI 兼容端点
 AI_API_KEY=sk-xxx                          # 只在服务端进程内，绝不进浏览器
 AI_MODEL=deepseek-v4-flash                 # 模型名按供应商填
+
+# 可选温度覆盖（非法值回落默认并 clamp 到 0~1）
+AI_TEMP_CHAT=0.7
+AI_TEMP_MENU=0.8
+AI_TEMP_RECIPE=0.7
+AI_TEMP_NUTRITION=0.5
 ```
 
 - 直接 `fetch` 调 `{baseUrl}/chat/completions`，**不引 SDK**（三个供应商都是 OpenAI 兼容协议，SDK 是多余依赖）
@@ -34,7 +40,7 @@ AI_MODEL=deepseek-v4-flash                 # 模型名按供应商填
 1. 人设：「中餐家常菜 AI 菜谱助手……回答实用、口语化、步骤清晰可操作」
 2. 菜谱库摘要（systemPromptWithLibrary）：
    每菜一行「名称｜食材:番茄,鸡蛋」；空库注明「菜谱库为空」
-   + 指令：优先推荐库中已有菜，不要重复生成
+   + 中性参考：避免推荐与库中完全相同的菜，但**不优先推荐已有菜**；同时要求尝试不同做法、避免大路菜
 3. 输出格式规则（各接口不同，见下）
 ```
 
@@ -42,19 +48,19 @@ AI_MODEL=deepseek-v4-flash                 # 模型名按供应商填
 
 ### 结构化输出协议与解析
 
-输出格式规则强制模型输出 `<recipe>{JSON}</recipe>` / `<menu>{JSON}</menu>` 标签包裹，规则内嵌完整示例（示例本身可被解析函数解出，作为回归测试锁定「示例与 schema 一致」）。
+输出格式规则强制模型输出 `<recipe>{JSON}</recipe>` / `<menu>{JSON}</menu>` / `<nutrition>{JSON}</nutrition>` 标签包裹，规则内嵌完整示例（示例本身可被解析函数解出，作为回归测试锁定「示例与 schema 一致」）。
 
 解析三级兜底（`extractJson` 平衡花括号扫描）：
 
 ```
-① <recipe>/<menu> 标签内提取（协议主路径）
+① <recipe>/<menu>/<nutrition> 标签内提取（协议主路径）
 ② markdown 代码栅栏内提取（模型偶尔加 ```json）
 ③ 全文平衡花括号扫描取首个可解析段（前后杂文本不干扰）
 ```
 
 扫描状态机正确处理嵌套对象、字符串内的花括号与转义引号；提取结果一律过 `validateRecipe`（strict schema），失败返回 null 由接口层重试。
 
-### 失败重试协议（三个接口共用）
+### 失败重试协议（四个接口共用）
 
 ```
 第一次调用 → 解析失败/上游异常
@@ -71,6 +77,7 @@ AI_MODEL=deepseek-v4-flash                 # 模型名按供应商填
 | 重试提示追加到用户消息 | 让模型看到自己上次的失败上下文（部分供应商不回传 assistant 错误输出） |
 | AI 输出的 id/时间戳**无条件覆写** | 提示词示例中的示例 id（`r-1730000000-ab12cd`）能通过 strict schema 校验，模型可能照抄导致 id 冲突——覆写是唯一可靠防线（T9 审查确认的硬条件，有「照抄示例 id + 2020 旧时间戳」夹具锁定） |
 | 营养标注 `estimated: true` 恒定 | AI 估算是参考值非实测，UI 层强制展示「估算值」标注，防误导 |
+| 温度分层 | chat/recipe=0.7（结构稳定）、menu=0.8（略偏创意）、nutrition=0.5（求稳）；可由 `AI_TEMP_*` 环境变量覆盖，统一 clamp 到 [0,1]，兼容 DeepSeek/GLM |
 
 ## 优缺点
 
@@ -78,7 +85,8 @@ AI_MODEL=deepseek-v4-flash                 # 模型名按供应商填
 
 - 换供应商=改三个环境变量，代码零改动（DeepSeek/GLM/任何 OpenAI 兼容端点通吃）
 - 三级解析兜底 + 重试，实测对「前后杂文本/代码栅栏/标签分片」各种模型坏习惯均有韧性
-- 库摘要让 AI 推荐与个人菜谱库联动（点菜页推荐理由会出现「已有菜谱」）
+- 库摘要保留为防重复参考（不再优先复用已有菜），同时以反重复提示+每请求「技法+风味」灵感种子提升同食材的输出多样性
+- 营养估算走独立 `/api/ai/nutrition`（0.5 温度），避免为获取营养再生成整份菜谱，降低成本与延迟
 - 示例自证测试：格式规则的示例若与 schema 漂移，测试立即红
 
 **缺点与已知边界**
@@ -98,4 +106,4 @@ AI_MODEL=deepseek-v4-flash                 # 模型名按供应商填
 SSE/JSON 响应 ──► 前端
 ```
 
-接口层不直接拼提示词、不直接解析模型输出——提示词与解析的演进都收敛在 ai-prompts 一个文件，三个接口只做参数校验、重试编排与状态码映射。
+接口层不直接拼提示词、不直接解析模型输出——提示词与解析的演进都收敛在 ai-prompts 一个文件，各接口只做参数校验、重试编排与状态码映射。
