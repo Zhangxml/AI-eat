@@ -6,9 +6,12 @@
 //       GET /api/config → 200 { aiConfigured, baseUrl, model, authEnabled }（绝不含 apiKey）
 //       GET/PATCH /api/settings → 用户级可写偏好（推荐风格等），存服务器 data/settings.json
 // 纯 UI 页无单测（裁定 5），移动端三约束：单列、触摸目标 ≥44px、无横向滚动
+// 「访问记录」入口默认隐藏（避免家人一眼看到审计记录），在「访问鉴权」卡片连点 5 次才显示；
+// 用组件内存态实现 → 刷新/重进页面天然回到隐藏（计数逻辑见 src/lib/tap-reveal.ts，有单测）
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { apiFetch } from '@/lib/api-fetch'
+import { createTapReveal } from '@/lib/tap-reveal'
 
 // GET /api/config 响应契约（与 route.ts 一致，绝不含 apiKey 字段）
 interface ConfigResponse {
@@ -45,6 +48,12 @@ export default function SettingsPage() {
   const [error, setError] = useState('')
   // 导出进行中状态
   const [exporting, setExporting] = useState(false)
+  // 访问记录入口是否可见：默认隐藏，连点「访问鉴权」5 次后显示。
+  // 只用组件内存态——刷新页面即回到隐藏（需求明确要求「刷新后隐藏」）
+  const [accessLogsVisible, setAccessLogsVisible] = useState(false)
+  // 连击计数器放在 ref：不触发渲染，也不参与 effect 依赖
+  const tapRevealRef = useRef<ReturnType<typeof createTapReveal> | null>(null)
+  if (tapRevealRef.current === null) tapRevealRef.current = createTapReveal()
   // 用户偏好（推荐风格）：null=加载中；保存中禁用切换防连点；错误显示在分组内
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
   const [savingStyle, setSavingStyle] = useState(false)
@@ -85,6 +94,12 @@ export default function SettingsPage() {
     } catch {
       if (mountedRef.current) setStyleError('偏好加载失败')
     }
+  }, [])
+
+  // 「访问鉴权」卡片被点击：累计连点，达到阈值后显示访问记录入口。
+  // 刻意不做任何进度提示——否则连点 3 次就会被旁人看出端倪，隐藏就失去意义
+  const handleAuthCardTap = useCallback(() => {
+    if (tapRevealRef.current?.tap(Date.now()) === true) setAccessLogsVisible(true)
   }, [])
 
   // 切换推荐风格：乐观更新（点即高亮）→ PATCH；失败回滚并提示
@@ -379,10 +394,34 @@ export default function SettingsPage() {
       </section>
 
       {/* 鉴权状态展示：PASSWORD 是否启用。与删除保护卡构成一组（分组卡片样式）：
-          上卡只留顶部圆角、下卡只留底部圆角，两卡贴合无间隔，组间与其他卡片一致（mb-6） */}
-      <section className="rounded-t-xl border border-b-0 border-neutral-200 p-4 dark:border-neutral-800">
-        <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">访问鉴权</h2>
-        <p className="text-sm text-neutral-600 dark:text-neutral-400">
+          上卡只留顶部圆角、下卡只留底部圆角，两卡贴合无间隔，组间与其他卡片一致（mb-6）。
+          整卡可点：连点 5 次显示「访问记录」入口（默认隐藏；刷新即回隐藏）。
+          刻意不给任何进度提示，否则连点几次就暴露了 */}
+      <section
+        role="button"
+        tabIndex={0}
+        // 不用 aria-label：它会覆盖子内容，读屏用户就听不到「已启用/未启用」这句唯一的有效信息。
+        // 改用 labelledby/describedby 把标题与状态都挂进可访问名与描述。
+        aria-labelledby="auth-card-title"
+        aria-describedby="auth-card-desc"
+        onClick={handleAuthCardTap}
+        onKeyDown={(e) => {
+          // 键盘可达：Enter / Space 计一次点击。
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          // preventDefault 必须放在 e.repeat 之前：Space 的默认动作是滚动页面，
+          // 而浏览器对「按住键」会逐次派发 keydown，前一次的 preventDefault 管不住后续 repeat
+          // （实测：先判 repeat 再 return，按住 Space 页面会一路滚到底）。
+          e.preventDefault()
+          // e.repeat 拦掉按住键的自动重复——否则一次长按就能刷满 5 次，违背「连续点击 5 次」语义
+          if (e.repeat) return
+          handleAuthCardTap()
+        }}
+        className="cursor-default rounded-t-xl border border-b-0 border-neutral-200 p-4 outline-none transition-colors active:bg-neutral-50 focus-visible:ring-2 focus-visible:ring-neutral-400 dark:border-neutral-800 dark:active:bg-neutral-900"
+      >
+        <h2 id="auth-card-title" className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">
+          访问鉴权
+        </h2>
+        <p id="auth-card-desc" className="text-sm text-neutral-600 dark:text-neutral-400">
           {config === null
             ? configFailed
               ? '状态加载失败'
@@ -394,8 +433,13 @@ export default function SettingsPage() {
       </section>
 
       {/* 删除保护状态展示：DELETE_ENABLED+DELETE_PASSWORD 是否启用（删除菜谱需输密码，服务端校验）。
-          分组中间卡：无圆角、去下边框（与访问记录入口卡贴合） */}
-      <section className="rounded-none border border-b-0 border-neutral-200 p-4 dark:border-neutral-800">
+          圆角随访问记录入口的可见性联动：入口隐藏时它是组尾（需底部圆角 + 下边框），
+          否则会出现「页面底部缺一个圆角 + 多一条断掉的边框」的视觉瑕疵 */}
+      <section
+        className={`border border-neutral-200 p-4 dark:border-neutral-800 ${
+          accessLogsVisible ? 'rounded-none border-b-0' : 'rounded-b-xl'
+        }`}
+      >
         <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">删除保护</h2>
         <p className="text-sm text-neutral-600 dark:text-neutral-400">
           {config === null
@@ -408,19 +452,22 @@ export default function SettingsPage() {
         </p>
       </section>
 
-      {/* 访问记录入口：状态组组尾卡（保留底部圆角，与上两卡贴合无间隔），点击进入 /access-logs 列表页 */}
-      <Link
-        href="/access-logs"
-        className="block rounded-b-xl border border-neutral-200 p-4 transition-colors active:bg-neutral-50 dark:border-neutral-800 dark:active:bg-neutral-900"
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">访问记录</span>
-          <span className="shrink-0 text-neutral-400 dark:text-neutral-500">›</span>
-        </div>
-        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-          查看写入、AI 调用与登录尝试等敏感操作记录
-        </p>
-      </Link>
+      {/* 访问记录入口：默认隐藏；在「访问鉴权」卡连点 5 次后显示（内存态，刷新即回隐藏）。
+          显示时作为状态组组尾卡（底部圆角），与上两卡贴合无间隔 */}
+      {accessLogsVisible && (
+        <Link
+          href="/access-logs"
+          className="block rounded-b-xl border border-neutral-200 p-4 transition-colors active:bg-neutral-50 dark:border-neutral-800 dark:active:bg-neutral-900"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">访问记录</span>
+            <span className="shrink-0 text-neutral-400 dark:text-neutral-500">›</span>
+          </div>
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+            查看写入、AI 调用与登录尝试等敏感操作记录
+          </p>
+        </Link>
+      )}
     </main>
   )
 }
