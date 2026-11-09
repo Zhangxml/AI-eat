@@ -7,7 +7,7 @@ import { z } from 'zod'
 
 export const SETTINGS_VERSION = 1
 
-// 推荐风格：home=经典家常（默认）/ creative=中式创意换口味
+// 推荐风格：home=湖北家常（默认）/ creative=外省中式创意换口味
 export const STYLE_VALUES = ['home', 'creative'] as const
 export type RecommendationStyle = (typeof STYLE_VALUES)[number]
 

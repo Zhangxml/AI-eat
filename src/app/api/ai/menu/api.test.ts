@@ -149,13 +149,13 @@ describe('POST /api/ai/menu', () => {
     expect(sysMsg.role).toBe('system')
     expect(sysMsg.content).toContain('<menu>')
     expect(sysMsg.content).toContain('番茄炒蛋｜食材:番茄,鸡蛋')
-    // 用户消息含人数 / 偏好 / 荤素搭配 / 家常档位约束（默认 home：经典家常优先，不注入反大路菜黑名单）
+    // 用户消息含人数 / 偏好 / 荤素搭配 / 档位约束（默认 home：湖北家常优先，不注入反大路菜黑名单）
     // + 每次随机灵感方向；不再要求优先已有菜
     expect(userMsg.role).toBe('user')
     expect(userMsg.content).toContain('3 人')
     expect(userMsg.content).toContain('清淡')
     expect(userMsg.content).toContain('荤素搭配')
-    expect(userMsg.content).toContain('经典家常菜')
+    expect(userMsg.content).toContain('湖北家常菜')
     expect(userMsg.content).toContain('本次灵感方向')
     expect(userMsg.content).not.toContain('已有菜谱')
     expect(userMsg.content).not.toContain('优先考虑')
@@ -171,8 +171,8 @@ describe('POST /api/ai/menu', () => {
     expect(res.status).toBe(200)
     const userMsg = aiCompleteMock.mock.calls[0][1][1]
     expect(userMsg.content).toContain('避免番茄炒蛋')
-    // creative 档不再说「经典家常菜为主」
-    expect(userMsg.content).not.toContain('经典家常菜为主')
+    // creative 档不再说「湖北家常菜为主」
+    expect(userMsg.content).not.toContain('湖北家常菜为主')
   })
 
   it('格式规则内嵌示例可被本接口解析（示例与 schema 一致，防「模型照抄坏示例」）', async () => {

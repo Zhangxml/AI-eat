@@ -53,15 +53,21 @@ describe('systemPromptWithLibrary 库摘要注入', () => {
     expect(prompt).toContain('不必优先推荐库中已有的菜')
     expect(prompt).not.toContain('推荐时优先推荐菜谱库中已有的菜')
   })
-  it('默认 home 档：优先经典家常做法（不再含「避免大路菜」）', () => {
+  it('默认 home 档：人设与档位句都是湖北家常（不再含「避免大路菜」）', () => {
     const prompt = systemPromptWithLibrary([recipeFixture])
-    expect(prompt).toContain('优先经典家常做法')
+    expect(prompt).toContain('湖北家常菜 AI 菜谱助手')
+    expect(prompt).toContain('优先湖北家常做法')
+    expect(prompt).toContain('粉蒸')
+    expect(prompt).not.toContain('优先经典家常做法')
     expect(prompt).not.toContain('避免总用最常见的大路菜')
   })
-  it('creative 档：注入「有新意/避免大路菜」创意约束', () => {
+  it('creative 档：注入「有新意/避免大路菜」创意约束，且人设仍为中餐（不被湖北带走）', () => {
     const prompt = systemPromptWithLibrary([recipeFixture], 'creative')
     expect(prompt).toContain('有新意的搭配')
     expect(prompt).toContain('避免大路菜')
+    expect(prompt).toContain('中餐家常菜 AI 菜谱助手')
+    expect(prompt).not.toContain('湖北家常菜 AI 菜谱助手')
+    expect(prompt).not.toContain('优先湖北家常做法')
   })
 })
 
@@ -102,16 +108,17 @@ describe('CHAT_MENU_FORMAT_RULE 食材用途规则', () => {
 })
 
 describe('buildChatMenuFormatRule 风格档位', () => {
-  it('home 档使用家常经典做法，不含「不常见做法」引导', () => {
+  it('home 档使用湖北家常做法，不含「不常见做法」引导', () => {
     const rule = buildChatMenuFormatRule('home')
-    expect(rule).toContain('优先给家常经典做法')
+    expect(rule).toContain('优先给湖北家常做法')
     expect(rule).not.toContain('不常见但有依据的做法')
+    expect(rule).not.toContain('优先给家常经典做法')
   })
 
   it('creative 档使用「不常见做法」引导', () => {
     const rule = buildChatMenuFormatRule('creative')
     expect(rule).toContain('不常见但有依据的做法')
-    expect(rule).not.toContain('优先给家常经典做法')
+    expect(rule).not.toContain('优先给湖北家常做法')
   })
 
   it('默认参数为 home', () => {

@@ -1,4 +1,4 @@
-// 灵感种子测试：锁定「家常默认 + 中式创意」两档词池（去除异国风味后的新契约）
+// 灵感种子测试：锁定「湖北家常默认 + 中式创意」两档词池（去除异国风味后的新契约）
 import { describe, expect, it } from 'vitest'
 import {
   INSPIRATION_STYLES,
@@ -28,10 +28,25 @@ describe('灵感种子词池', () => {
       expect(INSPIRATION_TECHNIQUES.home).not.toContain(t)
     }
   })
+
+  it('home 池是湖北家常方向（技法含粉蒸/煨汤，风味含咸鲜/微辣/腊香/湖鲜）', () => {
+    for (const t of ['粉蒸', '煨汤', '干炕']) expect(INSPIRATION_TECHNIQUES.home).toContain(t)
+    for (const s2 of ['咸鲜', '微辣', '腊香', '湖鲜']) expect(INSPIRATION_STYLES.home).toContain(s2)
+    // 旧的全国家常词已下线（它们不带地域倾向，换不掉「番茄炒蛋/青椒肉丝」的默认输出）
+    expect(INSPIRATION_STYLES.home).not.toContain('家常味')
+    expect(INSPIRATION_TECHNIQUES.home).not.toContain('炖煮')
+  })
+
+  it('home 与 creative 两池无重叠（保证 home 输出绝不混入创意档词）', () => {
+    const overlapT = INSPIRATION_TECHNIQUES.home.filter(t => INSPIRATION_TECHNIQUES.creative.includes(t))
+    const overlapS = INSPIRATION_STYLES.home.filter(s2 => INSPIRATION_STYLES.creative.includes(s2))
+    expect(overlapT).toEqual([])
+    expect(overlapS).toEqual([])
+  })
 })
 
 describe('pickInspiration 按档位取词', () => {
-  it('home 档只出家常词（rng 扫描全值域验证）', () => {
+  it('home 档只出湖北家常词（rng 扫描全值域验证）', () => {
     // 用固定 rng 扫描整个值域：每个采样点都必须落在家常池内（不含创意池的词）
     let step = 0
     const seqRng = () => {

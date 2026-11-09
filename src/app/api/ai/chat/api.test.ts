@@ -172,7 +172,8 @@ describe('POST /api/ai/chat', () => {
     aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
     await POST(jsonReq({ messages: [{ role: 'user', content: '今天吃什么' }] }))
     let sysContent = (aiChatStreamMock.mock.calls[0][1] as ChatMessage[])[0].content
-    expect(sysContent).toContain('优先经典家常做法')
+    expect(sysContent).toContain('优先湖北家常做法')
+    expect(sysContent).toContain('湖北家常菜 AI 菜谱助手')
     expect(sysContent).not.toContain('有新意的搭配')
 
     // 2) 设置文件改为 creative → 即使 URL 仍带 ?style=home 也以设置为准（服务端单一事实来源）
@@ -187,7 +188,9 @@ describe('POST /api/ai/chat', () => {
     )
     sysContent = (aiChatStreamMock.mock.calls[1][1] as ChatMessage[])[0].content
     expect(sysContent).toContain('有新意的搭配')
-    expect(sysContent).not.toContain('优先经典家常做法')
+    expect(sysContent).not.toContain('优先湖北家常做法')
+    // creative 档人设仍是中餐，不被湖北带走
+    expect(sysContent).toContain('中餐家常菜 AI 菜谱助手')
   })
 
   it('菜谱以 recipe 事件完整送达：parse 后 name 正确且 id/时间戳/source 被无条件覆写', async () => {
@@ -225,7 +228,7 @@ describe('POST /api/ai/chat', () => {
     const sent = aiChatStreamMock.mock.calls[0][1] as ChatMessage[]
     expect(sent[0].role).toBe('system')
     expect(sent[0].content).toContain('番茄炒蛋｜食材:番茄,鸡蛋')
-    expect(sent[0].content).toContain('中餐家常菜 AI 菜谱助手')
+    expect(sent[0].content).toContain('湖北家常菜 AI 菜谱助手')
   })
 
   it('以 done 事件收尾：最后一个事件为 done 且 data 为空对象，事件顺序 message→recipe→done', async () => {

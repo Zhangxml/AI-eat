@@ -157,11 +157,11 @@ function buildUserMessage(input: {
     parts.push(`口味偏好：${input.preference}`)
   }
   parts.push('请注意荤素搭配，合理组合荤菜、素菜、汤和主食')
-  // 风格档位约束（替代早期的反大路菜黑名单——那会把默认输出推向不家常）
+  // 风格档位约束（替代早期的反大路菜黑名单——那会把默认输出推向不家常）；home=湖北家常
   parts.push(
     input.style === 'creative'
       ? '菜单要有新意：避免番茄炒蛋、青椒肉丝、麻婆豆腐、土豆丝等大路菜，优先中式地方风味的特色搭配'
-      : '菜品以经典家常菜为主，做法简单、好吃下饭',
+      : '菜品以湖北家常菜为主：多用粉蒸、煨汤、腊味，常见藕与鱼鲜，做法简单、好吃下饭',
   )
   if (multiDay) {
     // 采购清单按「人数 × 天数」估算总量，并给出人均日消耗基准（不让模型瞎猜）
@@ -207,7 +207,7 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
-  // 系统消息 = 人设（含档位）+ 库摘要 + <menu> 格式规则；用户消息 = 人数/偏好/荤素搭配/档位约束/灵感；
+  // 系统消息 = 人设（含湖北家常/中餐档位）+ 库摘要 + <menu> 格式规则；用户消息 = 人数/偏好/荤素搭配/档位约束/灵感；
   // （「菜谱库已有菜优先」要求已按产品决定移除，库摘要仅用于避免完全重复）
   // 菜谱库读取失败（权限等）→ 500 中文（审计修复 #8）
   let recipes: Recipe[]

@@ -112,7 +112,9 @@ describe('POST /api/ai/recipes', () => {
     expect(res.status).toBe(200)
     const [sysMsg] = aiCompleteMock.mock.calls[0][1]
     expect(sysMsg.content).toContain('有新意的搭配')
-    expect(sysMsg.content).not.toContain('优先经典家常做法')
+    // 不能写成 not.toContain('优先经典家常做法')——那句文案已删除，断言恒真、失去守护作用
+    expect(sysMsg.content).not.toContain('优先湖北家常做法')
+    expect(sysMsg.content).toContain('中餐家常菜 AI 菜谱助手')
   })
 
   it('指定菜名时用户消息含「严格按该菜名」约束（creative 档也不得改名/加后缀）', async () => {

@@ -200,7 +200,7 @@ function processUpstreamChunk(
 }
 
 // POST handler：参数校验 → 400；AI 配置 → 503；上游请求失败 → 502；正常 → SSE 流
-// 可选 body.style：'home'（默认，家常优先）| 'creative'（中式创意），决定人设句与灵感池
+// 档位由全局设置（data/settings.json）决定：home=湖北家常（默认）| creative=外省中式创意，影响人设句与灵感池
 export async function POST(req: Request): Promise<Response> {
   const denied = requireAuth(req)
   if (denied) return denied

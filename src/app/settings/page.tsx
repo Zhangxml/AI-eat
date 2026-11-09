@@ -247,7 +247,7 @@ export default function SettingsPage() {
           <>
             <div className="flex items-center gap-2" role="group" aria-label="推荐风格">
               {[
-                { key: 'home' as const, label: '家常' },
+                { key: 'home' as const, label: '湖北家常' },
                 { key: 'creative' as const, label: '换换口味' },
               ].map((opt) => (
                 <button
@@ -268,7 +268,7 @@ export default function SettingsPage() {
             </div>
             <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
               {settings.style === 'home'
-                ? '经典家常菜优先：做法简单、食材好买、下饭'
+                ? '湖北家常菜优先：粉蒸、煨汤、腊味、藕与鱼鲜，做法简单下饭'
                 : '中式地方风味优先，避免常见大路菜'}
             </p>
           </>

@@ -80,18 +80,32 @@ export function extractChatMenuJson(text: string): ChatMenu | null {
   return null
 }
 
+// 湖北家常的「食材→做法」参考映射。三条设计约束（review 后确定）：
+// 1) 措辞必须带「可参考 / 可换别的湖北做法」——否则土豆永远变炕土豆，重蹈「同食材总出同几道菜」；
+// 2) 必须声明「用户已指定菜名时以用户为准」——本函数同时服务 /api/ai/recipes 的指定菜名路径；
+// 3) 只用湖北真正有辨识度的对应：豆腐→炕豆腐（「家常豆腐」是通用/川湘做法，不具湖北特征）、
+//    鱼→糍粑鱼/汆汤（煨汤在湖北主要指排骨藕汤/瓦罐鸡汤，不是鱼）。
+// 抽成常量供 systemPromptWithLibrary 与 buildChatMenuFormatRule 复用，避免两处措辞漂移。
+const HUBEI_STYLE_HINTS =
+  '可参考这些湖北做法（土豆→炕土豆/粉蒸，豆腐→炕豆腐，鱼→糍粑鱼/汆汤，五花肉→粉蒸肉/腊肉炒菜薹），' +
+  '同一食材也可换用别的湖北做法；若用户已明确指定菜名，以用户菜名为准'
+
 // 系统提示词：人设 + 库摘要段（仅作防重复参考，不设优先级）+ 风格档位约束。
-// style 决定推荐倾向：home=经典家常优先（默认），creative=中式地方风味与特色技法
+// style 决定推荐倾向：home=湖北家常优先（默认），creative=外省中式地方风味与特色技法
 export function systemPromptWithLibrary(recipes: Recipe[], style: InspirationStyle = 'home'): string {
+  // 人设首句随档位走：home 明确「湖北家常菜」，creative 保持「中餐家常菜」
+  // （避免 creative 档被人设带去湖北，也避免 home 档只改档位句而首句仍在说全国）
+  const cuisine = style === 'home' ? '湖北家常菜' : '中餐家常菜'
   const lines: string[] = [
-    '你是一个中餐家常菜 AI 菜谱助手，专门帮助用户解决「今天吃什么」的问题：可以按现有食材生成菜谱、',
+    `你是一个${cuisine} AI 菜谱助手，专门帮助用户解决「今天吃什么」的问题：可以按现有食材生成菜谱、`,
     '根据人数和口味点菜搭配、回答烹饪相关问题。回答要实用、口语化，步骤清晰可操作。',
   ]
   // 风格档位句（替代早期的「避免大路菜」全局约束——那会把默认输出推向不家常）
   lines.push(
     style === 'creative'
       ? '推荐时尽量给出有新意的搭配，避免大路菜；可以用中式地方风味与特色技法做出不一样的家常菜。'
-      : '推荐时优先经典家常做法：简单易做、食材好买、好吃下饭，拿不准就选大家最常做的那个。',
+      : `推荐时优先湖北家常做法：粉蒸、煨汤、腊味、炕、蒸菜，藕与鱼鲜常见，口味咸鲜微辣、汤水足；` +
+        `同样是家常菜，优先选湖北做法而不是通用做法，${HUBEI_STYLE_HINTS}；做法简单、食材好买、好吃下饭。`,
   )
   if (recipes.length === 0) {
     lines.push('菜谱库为空。', '你生成的菜谱后续会被用户存入菜谱库。')
@@ -140,13 +154,13 @@ export const SHOPPING_GROUPS = ['肉禽蛋', '蔬菜', '豆制品', '主食', '�
 // 与买什么（/api/ai/menu）的区别：这边有食材输入——每道菜标注主角食材，菜数由食材自然搭配决定
 // （可合并成一道菜，不要求菜数等于食材数；每种主要食材都要在推荐里有用途）；
 // 那边无食材——按人数配一桌菜 + 采购清单。清单确认后由前端逐菜调 /api/ai/recipes 生成完整菜谱。
-// 说明：第 9 条（做法倾向）按 style 切换——home 走家常经典，creative 才引导「不常见做法」
+// 说明：第 9 条（做法倾向）按 style 切换——home 走湖北家常，creative 才引导「不常见做法」
 export function buildChatMenuFormatRule(style: InspirationStyle = 'home'): string {
   return CHAT_MENU_FORMAT_RULE_BASE.map((line) =>
     line === '__STYLE_LINE__'
       ? style === 'creative'
         ? '  为每种食材给出不常见但有依据的做法（例如番茄可做番茄炖牛腩/番茄啫啫煲，而不只是番茄炒蛋）；'
-        : '  优先给家常经典做法（例如番茄炒蛋、番茄蛋汤），步骤简单、成功率高；'
+        : `  优先给湖北家常做法：${HUBEI_STYLE_HINTS}，步骤简单、成功率高；`
       : line,
   ).join('\n')
 }
