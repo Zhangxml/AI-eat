@@ -88,7 +88,8 @@ export function extractChatMenuJson(text: string): ChatMenu | null {
 // 抽成常量供 systemPromptWithLibrary 与 buildChatMenuFormatRule 复用，避免两处措辞漂移。
 const HUBEI_STYLE_HINTS =
   '可参考这些湖北做法（土豆→炕土豆/粉蒸，豆腐→炕豆腐，鱼→糍粑鱼/汆汤，五花肉→粉蒸肉/腊肉炒菜薹），' +
-  '同一食材也可换用别的湖北做法；若用户已明确指定菜名，以用户菜名为准'
+  '但不要每次都套用同一种：同一食材有多种湖北做法时请轮换（土豆也可红烧、煨汤、小炒，' +
+  '豆腐也可煨汤、家常烧，五花肉也可红烧、小炒）；若用户已明确指定菜名，以用户菜名为准'
 
 // 系统提示词：人设 + 库摘要段（仅作防重复参考，不设优先级）+ 风格档位约束。
 // style 决定推荐倾向：home=湖北家常优先（默认），creative=外省中式地方风味与特色技法
@@ -104,8 +105,8 @@ export function systemPromptWithLibrary(recipes: Recipe[], style: InspirationSty
   lines.push(
     style === 'creative'
       ? '推荐时尽量给出有新意的搭配，避免大路菜；可以用中式地方风味与特色技法做出不一样的家常菜。'
-      : `推荐时优先湖北家常做法：粉蒸、煨汤、腊味、炕、蒸菜，藕与鱼鲜常见，口味咸鲜微辣、汤水足；` +
-        `同样是家常菜，优先选湖北做法而不是通用做法，${HUBEI_STYLE_HINTS}；做法简单、食材好买、好吃下饭。`,
+      : `推荐时优先湖北家常做法：粉蒸、煨汤、腊味、干炕、蒸菜，藕与鱼鲜常见，口味咸鲜微辣、汤水足；` +
+        `同样是家常菜，能做成湖北风味就优先湖北风味，${HUBEI_STYLE_HINTS}；做法简单、食材好买、好吃下饭。`,
   )
   if (recipes.length === 0) {
     lines.push('菜谱库为空。', '你生成的菜谱后续会被用户存入菜谱库。')
