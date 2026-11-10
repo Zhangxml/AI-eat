@@ -5,9 +5,20 @@
 // - 注释行（: 开头）忽略；data 非法 JSON 或帧内无 data 的帧跳过，不中断整条流
 // node 可测：仅依赖 Response/ReadableStream 标准接口，不依赖浏览器 EventSource
 /* eslint-disable @typescript-eslint/no-explicit-any -- 简报契约签名逐字保留：data: any */
+export interface ReadSseOptions {
+  /**
+   * 空闲超时（毫秒）：超过该时长没收到任何字节则抛错。
+   * 必要性：`reader.read()` 在网络切换/上游挂起时既不 resolve 也不 reject，
+   * 调用方的 finally 永不到达——ChatView 曾因此把输入区永久置为 disabled（唯一出路是刷新，上下文全丢）。
+   * 不传则不设超时（保持原有语义，测试与一次性响应仍可用）。
+   */
+  idleTimeoutMs?: number
+}
+
 export async function readSse(
   res: Response,
   onEvent: (event: string, data: any) => Promise<void> | void,
+  options: ReadSseOptions = {},
 ): Promise<void> {
   if (!res.body) {
     throw new Error('SSE 响应无内容')
@@ -51,9 +62,32 @@ export async function readSse(
     // 其他字段（id:/retry:）本项目协议不使用，忽略
   }
 
+  // 单次读取：可选空闲超时。超时后取消 reader（释放上游连接）并抛错，让调用方 finally 复位 UI
+  const readOnce = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    const idle = options.idleTimeoutMs
+    if (idle === undefined || idle <= 0) return reader.read()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            // 顺序很重要：先 reject 再 cancel。cancel() 会让挂起的 read() 立刻以
+            // {done:true} 完成，若先 cancel，Promise.race 会当成「流正常结束」而静默返回
+            // （实测：先 cancel 时 50ms 超时后 readSse 正常 resolve，超时形同虚设）。
+            reject(new Error(`SSE 接收超时（${idle} 毫秒无数据）`))
+            void reader.cancel().catch(() => {})
+          }, idle)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
   try {
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await readOnce()
       if (done) break
       lineBuf += decoder.decode(value, { stream: true })
       const lines = lineBuf.split('\n')

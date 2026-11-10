@@ -48,6 +48,34 @@ describe('systemPromptWithLibrary 库摘要注入', () => {
     expect(prompt).toContain('番茄炒蛋｜食材:番茄,鸡蛋')
     expect(prompt).toContain('青椒肉丝｜食材:青椒,猪肉')
   })
+  it('库摘要有条数上限：5000 道菜时只取前 60 条，提示词长度可控（防上下文爆掉→稳定 502）', () => {
+    // backup 导入允许 5000 条；若全部拼进 system 提示词，约 7 万 token，每次请求都付且大概率撞上下文上限
+    const many: Recipe[] = Array.from({ length: 5000 }, (_, i) => ({
+      ...recipeFixture,
+      id: `r-17300000${String(i).padStart(5, '0')}-ab12cd`,
+      name: `菜式${i}`,
+    }))
+    const prompt = systemPromptWithLibrary(many)
+
+    // 只取前 MAX_SUMMARY_RECIPES 条（调用方 listRecipes 已按 updatedAt 降序传入，故「前 60」即「最近 60」）
+    expect(prompt).toContain('菜式0')
+    expect(prompt).not.toContain('菜式4999') // 超出上限的尾部不注入
+    // 排除表头「（格式：名称｜食材:食材名列表）」本身
+    const listed = prompt.split('\n').filter(l => l.includes('｜食材:') && !l.includes('格式：'))
+    expect(listed.length).toBe(60)
+    // 长度可控（每条约 40 字符，60 条约 2.4k 字符；留足余量断言 < 8000）
+    expect(prompt.length).toBeLessThan(8000)
+    // 明确告知模型「只列了部分」，避免它以为库里就这些
+    expect(prompt).toContain('仅列出')
+  })
+
+  it('未超上限时全量列出且不出现「仅列出」提示', () => {
+    const few: Recipe[] = [recipeFixture, { ...recipeFixture, id: 'r-2-aaaaaa', name: '青椒肉丝' }]
+    const prompt = systemPromptWithLibrary(few)
+    expect(prompt).not.toContain('仅列出')
+    expect(prompt.split('\n').filter(l => l.includes('｜食材:') && !l.includes('格式：')).length).toBe(2)
+  })
+
   it('菜谱库仅作防重复参考，不再要求优先推荐已有菜', () => {
     const prompt = systemPromptWithLibrary([recipeFixture])
     expect(prompt).toContain('不必优先推荐库中已有的菜')

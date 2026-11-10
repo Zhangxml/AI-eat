@@ -4,6 +4,8 @@
 // - loadAiConfig 保持真实实现，走 process.env 真实路径测 503
 // 断言方式：await POST(req) 后 await res.text() 拿全部 SSE 帧，解析事件序列逐一断言
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import path from 'node:path'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 
 vi.mock('@/lib/ai-client', async importOriginal => {
@@ -16,6 +18,7 @@ vi.mock('@/lib/recipe-store', async importOriginal => {
 })
 
 import { POST } from './route'
+import { issueToken } from '@/lib/auth'
 import { aiChatStream, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { listRecipes, createRecipe } from '@/lib/recipe-store'
 import type { Recipe } from '@/lib/recipe-types'
@@ -112,6 +115,24 @@ const ENV_KEYS = [
 ] as const
 
 describe('POST /api/ai/chat', () => {
+
+  it('启用鉴权后未带会话 → 401（守卫在 handler 首行，未触 AI 调用）', async () => {
+    process.env.PASSWORD = 'test-pw'
+    try {
+      const denied = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+      expect(denied.status).toBe(401)
+      // 带合法会话则放行（继续走到参数/AI 环节，不再被守卫拦）
+      const token = issueToken()
+      const req2 = new Request('http://x/api/ai/chat', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json', cookie: `ai-eat-session=${token}` },
+      })
+      expect((await POST(req2)).status).not.toBe(401)
+    } finally {
+      delete process.env.PASSWORD
+    }
+  })
   let dir: string
   let savedEnv: Record<string, string | undefined>
 
@@ -122,8 +143,8 @@ describe('POST /api/ai/chat', () => {
     delete process.env.AI_TEMP_MENU
     delete process.env.AI_TEMP_RECIPE
     delete process.env.AI_TEMP_NUTRITION
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-chat-api-')
-    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-chat-api-'))
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享日志目录
     // AI 配置默认给全（真实 loadAiConfig 可通过）；503 用例里再清空
     process.env.AI_BASE_URL = 'https://api.example.com'
     process.env.AI_API_KEY = 'sk-test'
@@ -229,6 +250,45 @@ describe('POST /api/ai/chat', () => {
     expect(sent[0].role).toBe('system')
     expect(sent[0].content).toContain('番茄炒蛋｜食材:番茄,鸡蛋')
     expect(sent[0].content).toContain('湖北家常菜 AI 菜谱助手')
+  })
+
+  it('SSE 流中带 `: ping` 心跳（覆盖首 token 等待与解析重试的零帧窗口，防客户端误判断流）', async () => {
+    // 上游先给一段正文后挂住不 close，模拟「模型还没吐完/服务端在做非流式重试」的零帧窗口
+    // 初始给 no-op：TS 无法推断 start 回调里的赋值，用初值避免「never 不可调用」
+    let push: (s: string) => void = () => {}
+    let closeUpstream: () => void = () => {}
+    const upstreamStream = new ReadableStream<Uint8Array>({
+      start(c) {
+        const enc = new TextEncoder()
+        push = (t: string) => c.enqueue(enc.encode(t))
+        closeUpstream = () => c.close()
+      },
+    })
+    aiChatStreamMock.mockResolvedValueOnce(
+      new Response(upstreamStream, { status: 200, headers: { 'content-type': 'text/event-stream' } }) as never,
+    )
+
+    vi.useFakeTimers()
+    try {
+      const res = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
+      push(deltaFrame('正文'))
+      // 推进心跳定时器：应向下游写入 `: ping`（注释帧）
+      await vi.advanceTimersByTimeAsync(10_000)
+      push(deltaFrame('续'))
+      await vi.advanceTimersByTimeAsync(10_000)
+      closeUpstream()
+      const text = await res.text()
+
+      expect(text).toContain(': ping')
+      // 心跳不破坏正文事件
+      const joined = parseSse(text)
+        .filter(f => f.event === 'message')
+        .map(f => (f.data as { t: string }).t)
+        .join('')
+      expect(joined).toBe('正文续')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('以 done 事件收尾：最后一个事件为 done 且 data 为空对象，事件顺序 message→recipe→done', async () => {

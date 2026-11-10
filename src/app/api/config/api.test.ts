@@ -14,6 +14,18 @@ const getReq = (withSession: boolean) =>
 let envSnapshot: NodeJS.ProcessEnv
 
 describe('配置接口 /api/config', () => {
+
+  it('启用鉴权后未带会话 → 401；带合法会话 → 200', async () => {
+    process.env.PASSWORD = 'test-pw'
+    try {
+      expect((await GET(new Request('http://x/api/config'))).status).toBe(401)
+      const token = issueToken()
+      const ok = await GET(new Request('http://x/api/config', { headers: { cookie: `ai-eat-session=${token}` } }))
+      expect(ok.status).toBe(200)
+    } finally {
+      delete process.env.PASSWORD
+    }
+  })
   beforeEach(() => {
     envSnapshot = { ...process.env }
   })

@@ -1,6 +1,7 @@
 // 菜谱库 REST API 单测：直接 import route handler 函数调用（node 环境，无 HTTP 服务器）
 // 数据目录经 process.env.AI_EAT_DATA_DIR 注入临时目录（store 每次调用时读 env，模块顶层默认值不受影响）
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { GET as listR, POST as createR } from './route'
@@ -26,8 +27,8 @@ describe('菜谱库 REST API', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-api-')
-    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-api-'))
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享日志目录
   })
 
   afterEach(async () => {
@@ -184,7 +185,7 @@ describe('菜谱库 REST API', () => {
       expect(res.status).toBe(500)
       expect(((await res.json()) as { error: string }).error).toContain('菜谱库读取失败')
     } finally {
-      process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
+      process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享日志目录
     }
   })
 

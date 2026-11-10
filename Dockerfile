@@ -33,8 +33,10 @@ COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
 COPY --from=builder --chown=node:node /app/public ./public
 
-# 非 root 运行：node:20-alpine 只内置 node 用户（uid/gid 1000，无 nextjs 用户）；
-# uid 1000 与典型宿主机首用户一致，bind mount ./data（宿主机首用户所有）对容器内 node 可写
+# 非 root 运行：node:20-alpine 只内置 node 用户（uid/gid 1000，无 nextjs 用户）。
+# 数据目录不在这里 mkdir/chown——compose 的 bind mount ./data:/app/data 会整体覆盖镜像内该路径，
+# 镜像里的属主设置对挂载点无效，实际写权限取决于【宿主机 ./data 的属主】。
+# 因此 README 要求先由用户 `mkdir -p ./data`（属主 uid 1000），见 README「数据目录归属」。
 USER node
 
 EXPOSE 3000

@@ -1,6 +1,8 @@
 // /api/auth 路由单测（Task 16）：POST 登录签发会话 Cookie / GET 查询鉴权开关
 // env 用快照接管 + afterEach 恢复（PASSWORD 影响签发与校验两侧）
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import path from 'node:path'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import { POST, GET } from './route'
 import { isValidToken, SESSION_COOKIE } from '@/lib/auth'
@@ -33,7 +35,7 @@ describe('/api/auth', () => {
   // 不隔离 AI_EAT_DATA_DIR 时，跑测试会向真实审计日志写入假记录，并在容量满时滚动丢弃真实记录。
   beforeEach(async () => {
     envSnapshot = { ...process.env }
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-auth-api-')
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-auth-api-'))
     process.env.AI_EAT_DATA_DIR = `${dir}/recipes`
     process.env.PASSWORD = 'p'
   })
@@ -104,7 +106,7 @@ describe('/api/auth', () => {
   it('401 登录失败日志 60 秒节流（审计修复 #7）：同 IP 只记首条，窗口外恢复', async () => {
     // 用真实 appendAccessLog 落盘验证；用独立 XFF IP 作节流键（TRUST_PROXY=true 打开 XFF 读取），
     // 避免与同文件其他 401 用例共享 'unknown' 键而撞上已开启的 60 秒窗口
-    const dataDir = await fs.mkdtemp('/tmp/opencode/ai-eat-auth-')
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-auth-'))
     process.env.AI_EAT_DATA_DIR = `${dataDir}/data/recipes`
     process.env.TRUST_PROXY = 'true'
     const postFrom = (ip: string, password: unknown) =>

@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
 import { dishKey } from '@/lib/dish-key'
+import { DishAborts } from '@/lib/dishes-regen'
 import { readSse } from '@/lib/sse-client'
 import { buildHistory } from '@/lib/chat-history'
 import RecipeCard from '@/components/RecipeCard'
@@ -63,6 +64,18 @@ function toDraft(recipe: Recipe) {
   return draft
 }
 
+// SSE 空闲超时：连续这么久收不到任何字节就中止。
+// 依据：服务端 `/api/ai/chat` 每 10 秒发一帧 `: ping` 心跳（src/lib/sse-heartbeat.ts），
+// 覆盖「首 token 等待（上游 120s）」与「解析失败后非流式重试（再 120s）」两段零帧窗口。
+// 因此 60 秒阈值远大于心跳间隔、又远小于最坏等待，既能及时发现真断网，也不会误杀合法重试。
+const SSE_IDLE_TIMEOUT_MS = 60_000
+
+// 整请求硬超时：兜住「连响应头都拿不到」的情况——此时 readSse 还没被调用，
+// 上面的空闲超时管不到（fetch 一直 pending → pending 永不复位）。
+// 取 300 秒 = 流式首轮最多 120s + 解析失败重试最多 120s（最坏 240s）+ 余量。
+// 用户随时可点「停止」立即中断，这里只是「人走开了」时的最后一道保险。
+const CHAT_HARD_TIMEOUT_MS = 300_000
+
 export default function ChatView() {
   // 完整聊天记录（内存态，不持久化）
   const [items, setItems] = useState<ChatItem[]>([])
@@ -77,11 +90,19 @@ export default function ChatView() {
   const [dishStates, setDishStates] = useState<Record<string, MenuDishState>>({})
   // 自动滚底：气泡区 ref，增量/卡片/错误到达时滚动到底
   const scrollRef = useRef<HTMLDivElement>(null)
-  // 请求取消（审计修复）：进行中的 chat / 逐菜生成请求统一挂到当前 AbortController 上，
-  // 组件卸载时 abort，避免卸载后 setState（React 警告与无谓更新）。ref 保活，回调读到最新实例
-  const abortRef = useRef<AbortController | null>(null)
+  // 请求取消：拆成两个槽——原先单槽 abortRef 会被后发起的请求覆盖，
+  // 导致「流式生成中点生成菜谱 → 槽位被换掉 → 切页只 abort 了后者」，
+  // SSE 那条继续跑完（继续烧 token）且卸载后 patch() 仍 setState（点菜页已有同款修复）。
+  // - chatAbortRef：流式聊天（同一时刻最多一条）
+  // - dishAbortsRef：逐菜生成（按 dishKey 登记，可与聊天并行、可全部取消）
+  const chatAbortRef = useRef<AbortController | null>(null)
+  const dishAbortsRef = useRef(new DishAborts())
   useEffect(() => {
-    return () => abortRef.current?.abort()
+    const dishAborts = dishAbortsRef.current
+    return () => {
+      chatAbortRef.current?.abort()
+      dishAborts.abortAll()
+    }
   }, [])
 
   // 自动滚底：items 变化（含流式增量）后滚到最底，解决软键盘遮挡下最新内容可见性
@@ -133,16 +154,18 @@ export default function ChatView() {
     // 守卫只拦「生成中」与「已就绪有菜谱」（防重复触发）；idle 或 ready-but-error（失败态）允许再次点击重试
     if (st && (st.phase === 'generating' || (st.phase === 'ready' && st.recipe))) return
     setDishStates((prev) => ({ ...prev, [key]: { phase: 'generating' } }))
+    // 控制器建在 try 外：catch 需要读 signal 区分「主动中止」与「网络异常」
+    const controller = new AbortController()
+    // 按 dishKey 登记：可与流式聊天并行、可被卸载统一取消（不再和聊天抢同一个槽）
+    dishAbortsRef.current.set(key, controller)
     try {
-      const controller = new AbortController()
-      abortRef.current = controller
       const res = await apiFetch('/api/ai/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dish: dishName }),
         signal: controller.signal,
       })
-      // 卸载触发的 abort：请求结果作废，不再 setState
+      // 主动中止（卸载/停止）：结果作废，不再 setState
       if (controller.signal.aborted) return
       if (res.ok) {
         // /api/ai/recipes 200 为 { recipe } 包裹形状（与 /api/recipes 入库接口的裸 Recipe 不同）
@@ -161,8 +184,11 @@ export default function ChatView() {
       setDishStates((prev) => ({ ...prev, [key]: { phase: 'idle', error: msg } }))
     } catch {
       // 网络异常同样回 idle 允许重试；卸载触发的 abort 不再 setState
-      if (abortRef.current?.signal.aborted) return
+      if (controller.signal.aborted) return
       setDishStates((prev) => ({ ...prev, [key]: { phase: 'idle', error: '网络异常，请稍后重试' } }))
+    } finally {
+      // 结束（含中止）必注销登记，避免注册表无限增长；带实例校验防误删同名新请求
+      dishAbortsRef.current.delete(key, controller)
     }
   }
 
@@ -190,9 +216,16 @@ export default function ChatView() {
     const patch = (fn: (it: ChatItem) => ChatItem) =>
       setItems((prev) => prev.map((it, i) => (i === idx ? fn(it) : it)))
 
+    // 控制器建在 try 外：catch 需要读 signal 判断是「用户停止/卸载」还是真网络异常
+    const controller = new AbortController()
+    chatAbortRef.current = controller
+    // 硬超时：到点主动 abort，并用 timedOut 标记与「用户点停止」区分（后者应静默）
+    let timedOut = false
+    const hardTimer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, CHAT_HARD_TIMEOUT_MS)
     try {
-      const controller = new AbortController()
-      abortRef.current = controller
       // 推荐风格由服务端全局设置决定（设置页可改），前端不传参
       const res = await apiFetch('/api/ai/chat', {
         method: 'POST',
@@ -212,6 +245,8 @@ export default function ChatView() {
         patch((it) => ({ ...it, error: msg }))
         return
       }
+      // 空闲超时：网络切换/上游挂起时 reader.read() 既不 resolve 也不 reject，
+      // 否则 pending 永不复位、输入区永久禁用（唯一出路是刷新，聊天记录全丢）
       await readSse(res, (event, data) => {
         if (event === 'message') {
           // 增量：拼当前 assistant 气泡（data: { t: string }）
@@ -229,12 +264,16 @@ export default function ChatView() {
           if (typeof err === 'string') patch((it) => ({ ...it, error: err }))
         }
         // done：无需处理，finally 解锁输入
-      })
+      }, { idleTimeoutMs: SSE_IDLE_TIMEOUT_MS })
     } catch {
-      // fetch 本身抛错（网络断开等）；abort（组件卸载）后不再 setState，避免卸载后更新
-      if (abortRef.current?.signal.aborted) return
-      patch((it) => ({ ...it, error: '网络异常，请稍后重试' }))
+      // 三种来源要区分开：
+      // - 用户点「停止」/组件卸载：主动 abort 且非超时 → 静默（用户已知情）
+      // - 硬超时：同样 aborted，但要让用户知道为什么停了
+      // - 空闲超时（readSse 抛出）/网络断开：未 abort → 统一文案
+      if (controller.signal.aborted && !timedOut) return
+      patch((it) => ({ ...it, error: timedOut ? '请求超时，请重试' : '网络异常，请稍后重试' }))
     } finally {
+      clearTimeout(hardTimer)
       setPending(false)
     }
   }
@@ -373,15 +412,28 @@ export default function ChatView() {
             disabled={pending}
             className={`${inputClass} max-h-40 resize-none py-2`}
           />
-          <button
-            type="button"
-            onClick={() => void handleSend()}
-            disabled={pending || input.trim() === ''}
-            aria-label="发送"
-            className="min-h-[44px] shrink-0 rounded-lg bg-neutral-900 px-4 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-400"
-          >
-            发送
-          </button>
+          {/* 回复中把「发送」换成「停止」：此前只能等（空闲超时前无出路），
+              现在可主动中断——点停止即 abort 当前 SSE，finally 复位输入区，已收到的内容保留 */}
+          {pending ? (
+            <button
+              type="button"
+              onClick={() => chatAbortRef.current?.abort()}
+              aria-label="停止生成"
+              className="min-h-[44px] shrink-0 rounded-lg border border-neutral-300 px-4 text-base font-medium text-neutral-900 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-100 dark:active:bg-neutral-800"
+            >
+              停止
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleSend()}
+              disabled={input.trim() === ''}
+              aria-label="发送"
+              className="min-h-[44px] shrink-0 rounded-lg bg-neutral-900 px-4 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:bg-neutral-300 disabled:text-neutral-500 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300 dark:disabled:bg-neutral-700 dark:disabled:text-neutral-400"
+            >
+              发送
+            </button>
+          )}
         </div>
       </div>
     </div>

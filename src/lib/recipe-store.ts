@@ -3,6 +3,8 @@
 // 并发策略（设计文档 §7）：单人使用，写临时文件 + fs.rename 原子替换，无需文件锁；本层无内存缓存，始终以磁盘为准
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+// 原子写（带随机临时名，并发安全）收敛在 atomic-write，三个写入函数共用
+import { atomicWriteFile } from './atomic-write'
 import type { Recipe, DraftRecipe } from './recipe-types'
 import { validateRecipe, makeRecipeId } from './recipe-types'
 
@@ -23,20 +25,6 @@ async function readRecipeFile(file: string): Promise<Recipe | null> {
     return validateRecipe(JSON.parse(raw))
   } catch {
     return null
-  }
-}
-
-// 原子写：先建目录（全新部署 data/ 不入库，首次写入时目录可能不存在），再写 <目标>.tmp，
-// rename 覆盖目标，失败时清理临时文件，不残留 .tmp。mkdir 收敛在此一处，三个写入函数自动全覆盖
-async function atomicWrite(file: string, data: string): Promise<void> {
-  const tmp = `${file}.tmp`
-  try {
-    await fs.mkdir(path.dirname(file), { recursive: true })
-    await fs.writeFile(tmp, data, 'utf8')
-    await fs.rename(tmp, file)
-  } finally {
-    // rename 成功后 tmp 已不存在；仅在失败残留时才会真正删到东西
-    await fs.rm(tmp, { force: true }).catch(() => {})
   }
 }
 
@@ -88,7 +76,7 @@ export async function getRecipe(id: string, dir: string = recipesDir()): Promise
 export async function createRecipe(draft: DraftRecipe, dir: string = recipesDir()): Promise<Recipe> {
   const now = new Date().toISOString()
   const recipe: Recipe = { ...draft, id: makeRecipeId(), createdAt: now, updatedAt: now }
-  await atomicWrite(path.join(dir, `${recipe.id}.json`), JSON.stringify(recipe, null, 2))
+  await atomicWriteFile(path.join(dir, `${recipe.id}.json`), JSON.stringify(recipe, null, 2))
   return recipe
 }
 
@@ -107,7 +95,7 @@ export async function updateRecipe(
     createdAt: existing.createdAt,
     updatedAt: new Date().toISOString(),
   }
-  await atomicWrite(path.join(dir, `${id}.json`), JSON.stringify(recipe, null, 2))
+  await atomicWriteFile(path.join(dir, `${id}.json`), JSON.stringify(recipe, null, 2))
   return recipe
 }
 
@@ -129,7 +117,7 @@ export async function deleteRecipe(id: string, dir: string = recipesDir()): Prom
 // 非法 id 直接 throw（不静默返回）：备份导入侧靠捕获该异常把该条计入 invalidIds
 export async function putRecipe(recipe: Recipe, dir: string = recipesDir()): Promise<void> {
   if (!isSafeId(recipe.id)) throw new Error('非法的菜谱 id')
-  await atomicWrite(path.join(dir, `${recipe.id}.json`), JSON.stringify(recipe, null, 2))
+  await atomicWriteFile(path.join(dir, `${recipe.id}.json`), JSON.stringify(recipe, null, 2))
 }
 
 // 纯函数过滤：q 大小写不敏感匹配名称或任一食材名 includes；tag 精确匹配；两者同时给定时取交集

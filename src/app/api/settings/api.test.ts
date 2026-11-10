@@ -1,5 +1,7 @@
 // /api/settings 单测：GET 返回默认、PATCH 局部更新、未知键 400、鉴权、写失败 500
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import path from 'node:path'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import { GET, PATCH } from './route'
 import { issueToken } from '@/lib/auth'
@@ -15,7 +17,7 @@ describe('/api/settings', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-settings-api-')
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-settings-api-'))
     process.env.AI_EAT_DATA_DIR = `${dir}/recipes`
   })
 

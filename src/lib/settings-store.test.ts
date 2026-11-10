@@ -1,5 +1,6 @@
 // 设置文件存储单测：容错回落、原子写、目录自动创建、损坏文件不崩
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { readSettings, writeSettings, settingsFilePath } from './settings-store'
@@ -8,7 +9,7 @@ describe('设置文件存储', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-settings-')
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-settings-'))
     process.env.AI_EAT_DATA_DIR = `${dir}/recipes`
   })
 
@@ -29,7 +30,7 @@ describe('设置文件存储', () => {
   })
 
   it('目录不存在时写入会自动创建（首次使用）', async () => {
-    const fresh = await fs.mkdtemp('/tmp/opencode/ai-eat-settings-fresh-')
+    const fresh = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-settings-fresh-'))
     process.env.AI_EAT_DATA_DIR = `${fresh}/data/recipes`
     try {
       await writeSettings({ version: 1, style: 'creative' })

@@ -80,6 +80,10 @@ export function extractChatMenuJson(text: string): ChatMenu | null {
   return null
 }
 
+// 库摘要条数上限：60 道约 2.4k 字符（≈1.5k token），足以覆盖「避免重复」的用途，
+// 又不会因为备份导入 5000 条而把 system 提示词撑到超出模型上下文
+const MAX_SUMMARY_RECIPES = 60
+
 // 湖北家常的「食材→做法」参考映射。三条设计约束（review 后确定）：
 // 1) 措辞必须带「可参考 / 可换别的湖北做法」——否则土豆永远变炕土豆，重蹈「同食材总出同几道菜」；
 // 2) 必须声明「用户已指定菜名时以用户为准」——本函数同时服务 /api/ai/recipes 的指定菜名路径；
@@ -112,11 +116,19 @@ export function systemPromptWithLibrary(recipes: Recipe[], style: InspirationSty
     lines.push('菜谱库为空。', '你生成的菜谱后续会被用户存入菜谱库。')
     return lines.join('\n')
   }
+  // 条数上限：backup 导入允许 5000 条，若全部拼进 system 提示词约 7 万 token，
+  // 每次请求都付且大概率撞上下文上限→稳定 502。摘要只用于「避免推荐重复」，
+  // 所以取最近 MAX_SUMMARY_RECIPES 道（listRecipes 已按 updatedAt 降序）足够。
+  const shown = recipes.slice(0, MAX_SUMMARY_RECIPES)
+  const truncated = recipes.length > shown.length
   lines.push(
     '用户有一个菜谱库，里面已有的菜如下（格式：名称｜食材:食材名列表）：',
-    ...recipes.map(r => `${r.name}｜食材:${r.ingredients.map(i => i.name).join(',')}`),
-    '以上清单仅供参考：避免推荐与库中完全相同的菜即可，不必优先推荐库中已有的菜。',
+    ...shown.map(r => `${r.name}｜食材:${r.ingredients.map(i => i.name).join(',')}`),
   )
+  if (truncated) {
+    lines.push(`（库中共 ${recipes.length} 道，以上仅列出最近 ${shown.length} 道）`)
+  }
+  lines.push('以上清单仅供参考：避免推荐与库中完全相同的菜即可，不必优先推荐库中已有的菜。')
   return lines.join('\n')
 }
 

@@ -44,13 +44,26 @@ vim .env
 cp .env.example .env
 vim .env
 
-# 2. 构建并启动（宿主机 8888 → 容器 3000，数据落宿主机 ./data）
+# 2. 先创建数据目录（必须由当前用户创建，见下方「数据目录归属」）
+mkdir -p ./data
+
+# 3. 构建并启动（宿主机 8888 → 容器 3000，数据落宿主机 ./data）
 docker compose up -d
 
 # 查看日志 / 停止
 docker compose logs -f
 docker compose down
 ```
+
+**数据目录归属（务必读）**：compose 用 bind mount `./data:/app/data`，容器内以 `node`（uid 1000）运行，
+因此**宿主机 `./data` 的属主必须是 uid 1000**。`data/` 在 `.gitignore` 里，新克隆默认不存在——
+若不加上面的 `mkdir -p ./data` 直接 `docker compose up`，docker daemon 会以 `root:root` 创建该目录，
+容器内写不进去，表现为「保存菜谱/改设置全部 500」且审计日志静默丢失（`appendAccessLog` 吞异常）。
+
+排查：`stat -c %u ./data` 应等于 **1000**（容器内 `node` 的 uid）。
+即使 `ls -ld` 显示的是「你自己的用户」也不一定正确——若你的 uid 不是 1000（部分发行版/企业镜像的首用户是 1001），
+容器仍写不进去。此时执行 `sudo chown -R 1000:1000 ./data`；或在 `docker-compose.yml` 的 service 下加
+`user: "1000:1000"` 让容器以该 uid 运行（不依赖宿主机 chown，更稳）。
 
 ## 环境变量
 

@@ -1,5 +1,7 @@
 // 访问日志接口单测：直接 import handler（node 环境）；数据目录经 AI_EAT_DATA_DIR 注入临时目录
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import path from 'node:path'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import { GET } from './route'
 import { appendAccessLog, clientIpOf, readAccessLogs } from '@/lib/access-log'
@@ -8,7 +10,7 @@ describe('访问日志', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-access-log-')
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-access-log-'))
     // AI_EAT_DATA_DIR 指向 data/recipes，日志落在其父目录 data/logs/
     process.env.AI_EAT_DATA_DIR = `${dir}/data/recipes`
   })

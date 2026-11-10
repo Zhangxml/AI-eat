@@ -4,6 +4,7 @@
 // 隐私红线：只记 时间/IP/方法/路径/状态码，不含任何密码、Key、查询参数（搜索词不记录）
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { atomicWriteFile } from './atomic-write'
 
 // 单条访问记录
 export interface AccessLogEntry {
@@ -93,9 +94,9 @@ async function compactFile(file: string, line: string): Promise<void> {
   const lines = existing.split('\n').filter((l) => l.trim() !== '')
   // 超上限：丢弃最旧的（保留 MAX_ENTRIES - 1 条，给新条目腾位）
   const kept = lines.length >= MAX_ENTRIES ? lines.slice(lines.length - (MAX_ENTRIES - 1)) : lines
-  const tmp = `${file}.tmp`
-  await fs.writeFile(tmp, [...kept, line.trim()].join('\n') + '\n', 'utf8')
-  await fs.rename(tmp, file)
+  // 与菜谱库/设置共用同一原子写（随机临时名）——虽然这里已由 Promise 链串行化，
+  // 但保持全仓只有一种临时名策略，避免将来上多进程时重演「固定 .tmp 互踩」
+  await atomicWriteFile(file, [...kept, line.trim()].join('\n') + '\n')
 }
 
 // 读取全部访问记录：最新在前（文件尾部是最新的，倒序返回）。文件不存在返回空数组

@@ -31,7 +31,12 @@ docker compose up -d --build    # 宿主机 8888 → 容器 3000，./data 挂载
 ```
 
 - 三段构建（deps → builder → runner，node:20-alpine）；builder 阶段 `ENV DOCKER_BUILD=1` 触发 `next.config.ts` 的条件 standalone 输出（裸机 `next start` 不受影响）
-- runner 用镜像内置 `node` 用户（uid 1000，与典型宿主机首用户一致 → bind mount `./data` 直接可写）；**不用 `nextjs` 用户**（node:20-alpine 不存在该用户，曾是构建必败的 Critical，审查从静态读出）
+- runner 用镜像内置 `node` 用户（uid 1000）；**不用 `nextjs` 用户**（node:20-alpine 不存在该用户，曾是构建必败的 Critical）
+- **数据目录归属（部署必读）**：`data/` 在 `.gitignore` 里，新克隆不存在。若不先 `mkdir -p ./data` 就 `docker compose up`，
+  docker daemon 会以 `root:root` 创建该目录，容器内 uid 1000 写不进去——表现为「保存菜谱/改设置全 500」，
+  且 `appendAccessLog` 会静默吞掉日志写失败，问题更隐蔽。**镜像内 `mkdir/chown /app/data` 无效**：
+  bind mount `./data:/app/data` 会整体覆盖该路径，写权限只取决于宿主机目录属主。README 已在 compose 步骤前加 `mkdir -p ./data`。
+  排查：`stat -c %u ./data` 必须等于 **1000**（容器内 `node` 的 uid）——即使 `ls -ld` 显示的是「你自己的用户」，只要你的 uid 不是 1000（部分发行版/企业镜像首用户是 1001）容器照样写不进。修正：`sudo chown -R 1000:1000 ./data`，或在 compose 的 service 下加 `user: "1000:1000"`（不依赖宿主机 chown，更稳）
 - standalone 产物手动 COPY 三件套：server.js、`.next/static`（放错根级会 404 白屏——等效验收抓到的真实 bug）、public；`data/` 不进镜像
 - `.dockerignore` 排除 data/.env：密钥与数据永不进镜像层
 

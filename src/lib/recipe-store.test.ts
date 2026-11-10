@@ -1,5 +1,6 @@
-// 菜谱文件存储单测：临时目录放 /tmp/opencode 下，每用例独立目录，通过末位 dir 参数注入（不改环境变量，那是 T4 的事）
+// 菜谱文件存储单测：临时目录放系统 tmpdir 下，每用例独立目录，通过末位 dir 参数注入（不改环境变量，那是 T4 的事）
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
@@ -36,7 +37,7 @@ describe('菜谱文件存储', () => {
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-test-')
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-test-'))
   })
 
   afterEach(async () => {
@@ -121,7 +122,7 @@ describe('菜谱文件存储', () => {
   it('id 白名单：路径穿越 id 被拦截——getRecipe/updateRecipe 返回 null 且不触碰越界文件', async () => {
     // 越界目标：store 目录外层放一份「合法菜谱」金丝雀（若守卫生效则绝不可被读到/覆写）；
     // 用合法菜谱而非任意 JSON，确保 RED 阶段无守卫时真的读得回来（package.json 会被 schema 拒掉，测不出真红）
-    const root = await fs.mkdtemp('/tmp/opencode/ai-eat-trav-')
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-trav-'))
     try {
       const store = path.join(root, 'store')
       const outside = makeRecipe('r-outside', '越界菜谱', ['其他'], ['土豆'])

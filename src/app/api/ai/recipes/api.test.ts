@@ -2,6 +2,8 @@
 // - vi.mock 掉 @/lib/ai-client 的 aiComplete（loadAiConfig 保持真实实现，走 process.env 真实路径测 503）
 // - vi.mock 掉 @/lib/recipe-store 的 listRecipes / createRecipe（createRecipe 一旦被调即抛错，锁死「不写盘」）
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import path from 'node:path'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 
 vi.mock('@/lib/ai-client', async importOriginal => {
@@ -14,6 +16,7 @@ vi.mock('@/lib/recipe-store', async importOriginal => {
 })
 
 import { POST } from './route'
+import { issueToken } from '@/lib/auth'
 import { aiComplete } from '@/lib/ai-client'
 import { listRecipes, createRecipe } from '@/lib/recipe-store'
 import { RECIPE_FORMAT_RULE } from '@/lib/ai-prompts'
@@ -75,6 +78,24 @@ interface ErrorResponse {
 }
 
 describe('POST /api/ai/recipes', () => {
+
+  it('启用鉴权后未带会话 → 401（守卫在 handler 首行，未触 AI 调用）', async () => {
+    process.env.PASSWORD = 'test-pw'
+    try {
+      const denied = await POST(jsonReq({ dish: '番茄炒蛋', servings: 2 }))
+      expect(denied.status).toBe(401)
+      // 带合法会话则放行（继续走到参数/AI 环节，不再被守卫拦）
+      const token = issueToken()
+      const req2 = new Request('http://x/api/ai/recipes', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json', cookie: `ai-eat-session=${token}` },
+      })
+      expect((await POST(req2)).status).not.toBe(401)
+    } finally {
+      delete process.env.PASSWORD
+    }
+  })
   let dir: string
   let savedEnv: Record<string, string | undefined>
 
@@ -85,8 +106,8 @@ describe('POST /api/ai/recipes', () => {
     delete process.env.AI_TEMP_MENU
     delete process.env.AI_TEMP_RECIPE
     delete process.env.AI_TEMP_NUTRITION
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-ai-api-')
-    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-ai-api-'))
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享日志目录
     // AI 配置默认给全（真实 loadAiConfig 可通过）；503 用例里再清空
     process.env.AI_BASE_URL = 'https://api.example.com'
     process.env.AI_API_KEY = 'sk-test'

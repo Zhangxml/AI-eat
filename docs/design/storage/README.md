@@ -30,8 +30,8 @@ DraftRecipe ──createRecipe──► 补 id(r-<毫秒>-<hex6>)+时间戳 ─�
 | 决策 | 实现 | 为什么 |
 | --- | --- | --- |
 | 一菜一文件 | `<id>.json`，文件名即 id | 用户可手动改/删单个菜谱；备份恢复=按 id 复制文件；避免单文件并发写坏全库 |
-| 原子写 | 写 `<file>.tmp` → `fs.rename` → 失败时 `finally` 清理 tmp | 单进程单人使用，rename 原子性足够，不需要文件锁（规格 7 明确裁定） |
-| 写前建目录 | `atomicWrite` 内 `mkdir(recursive)` 一处收敛 | 三个写入函数（create/update/put）自动全覆盖；修复过全新部署首次写入 ENOENT 500 的线上问题 |
+| 原子写（写原子性） | 写 `<file>.<uuid>.tmp` → `fs.rename` → 失败时 `finally` 清理自己的 tmp（`src/lib/atomic-write.ts`，菜谱库与设置共用） | 临时名带随机后缀：原实现用固定 `<file>.tmp`，两个并发写会争用同一临时文件——实测 50 轮并发里 41 轮出现「一方 rename 报 ENOENT（表现为 500）、但磁盘上是另一方内容」，失败方的修改被静默吞掉。随机名让每个写手独占临时文件。**注意边界**：这只保证「单次写不撕裂、不互踩」；`settings` PATCH 与 `updateRecipe` 仍是「读→改→写」，两个并发请求都返回 200 但后者覆盖前者（last-writer-wins），属单人自用的已知取舍 |
+| 写前建目录 | `atomicWriteFile` 内 `mkdir(recursive)` 一处收敛 | 三个写入函数（create/update/put）自动全覆盖；修复过全新部署首次写入 ENOENT 500 的线上问题 |
 | 非法文件容忍 | `listRecipes` 逐文件 parse+校验，失败进 `invalidFiles` 上报，不崩溃 | 用户手改 JSON 是设计预期（规格 5.3），坏文件跳过+告警优于整库不可用 |
 | 列表排序 | `updatedAt` ISO 字符串字典序降序 | 本层写入路径时间戳格式自洽；用户手改成非 ISO 只退化排序不致错 |
 | 搜索/过滤 | `filterRecipes` 纯函数：q 大小写不敏感匹配名称或食材名 includes，tag 精确 | 无索引、无依赖，几十~几百道菜规模内存过滤毫秒级完成 |

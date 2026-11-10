@@ -1,5 +1,7 @@
 // POST /api/ai/nutrition 单测：独立营养估算，温度 0.5 + 严格 JSON + 重试一次
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import path from 'node:path'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 
 vi.mock('@/lib/ai-client', async importOriginal => {
@@ -8,6 +10,7 @@ vi.mock('@/lib/ai-client', async importOriginal => {
 })
 
 import { POST } from './route'
+import { issueToken } from '@/lib/auth'
 import { aiComplete } from '@/lib/ai-client'
 
 const aiCompleteMock = vi.mocked(aiComplete)
@@ -22,12 +25,30 @@ const jsonReq = (body: unknown) =>
 const ENV_KEYS = ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_EAT_DATA_DIR', 'AI_TEMP_NUTRITION'] as const
 
 describe('POST /api/ai/nutrition', () => {
+
+  it('启用鉴权后未带会话 → 401（守卫在 handler 首行，未触 AI 调用）', async () => {
+    process.env.PASSWORD = 'test-pw'
+    try {
+      const denied = await POST(jsonReq({ recipe: { name: '番茄炒蛋', ingredients: [{ name: '番茄', amount: '2个' }], servings: 2 } }))
+      expect(denied.status).toBe(401)
+      // 带合法会话则放行（继续走到参数/AI 环节，不再被守卫拦）
+      const token = issueToken()
+      const req2 = new Request('http://x/api/ai/nutrition', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'content-type': 'application/json', cookie: `ai-eat-session=${token}` },
+      })
+      expect((await POST(req2)).status).not.toBe(401)
+    } finally {
+      delete process.env.PASSWORD
+    }
+  })
   let dir: string
   let savedEnv: Record<string, string | undefined>
 
   beforeEach(async () => {
     savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-nutrition-api-')
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-nutrition-api-'))
     process.env.AI_EAT_DATA_DIR = `${dir}/recipes`
     process.env.AI_BASE_URL = 'https://api.example.com'
     process.env.AI_API_KEY = 'sk-test'

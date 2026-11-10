@@ -16,6 +16,7 @@ import { listRecipes } from '@/lib/recipe-store'
 import { readSettings } from '@/lib/settings-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
+import { startSseHeartbeat } from '@/lib/sse-heartbeat'
 import { checkBodySize, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireAuth } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
@@ -325,6 +326,8 @@ export async function POST(req: Request): Promise<Response> {
     },
   )
 
+  // 心跳的停止函数：提到 stream 外层，让 cancel()（客户端断开）也能立刻清掉定时器
+  let stopHeartbeat: (() => void) | null = null
   const out = new ReadableStream<Uint8Array>({
     async start(controller) {
       const enc = new TextEncoder()
@@ -339,6 +342,12 @@ export async function POST(req: Request): Promise<Response> {
           clientGone = true
         }
       }
+      // 心跳：覆盖「首 token 等待（上游超时 120s）」与「解析失败后非流式重试（再 120s）」两段
+      // 零帧窗口。否则客户端任何小于 240s 的空闲超时都会误杀合法请求（实测曾导致
+      // 服务端已产出菜谱、客户端已放弃 → 聊天记录不持久化 → 用户永久丢失该菜谱）。
+      // 注释帧 `: ping` 被 readSse 与 EventSource 忽略，对协议零影响。
+      // 附带收益：Next 会缓冲响应头直到第一次 write，心跳把「响应头到达」从最坏 240s 收敛到 ≤10s。
+      stopHeartbeat = startSseHeartbeat(emit)
       try {
         while (!clientGone) {
           const { done, value } = await reader.read()
@@ -399,6 +408,7 @@ export async function POST(req: Request): Promise<Response> {
         // 客户端断开时下游流已取消，close() 会抛 "Controller is already closed"；
         // 必须在这里吞掉，否则会落入下方 catch 被误记为「上游中断 502」
         // （此前每次关页面/切页都会产生一条假的 502 审计记录）
+        stopHeartbeat?.()
         try {
           controller.close()
         } catch {
@@ -416,6 +426,7 @@ export async function POST(req: Request): Promise<Response> {
           // 访问日志（审计 #26）：仅真实上游中断记 502；客户端主动关闭不记
           await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 502 })
         }
+        stopHeartbeat?.()
         try {
           controller.close()
         } catch {
@@ -424,8 +435,9 @@ export async function POST(req: Request): Promise<Response> {
       }
     },
     cancel() {
-      // 客户端主动断开响应流：取消上游 reader
+      // 客户端主动断开响应流：先停心跳，再取消上游 reader
       clientGone = true
+      stopHeartbeat?.()
       void reader.cancel().catch(() => {})
     },
   })

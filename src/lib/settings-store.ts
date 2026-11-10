@@ -4,6 +4,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { defaultSettings, parseSettingsFile, settingsSchema, type Settings } from './settings'
+import { atomicWriteFile } from './atomic-write'
 
 // 设置文件路径：AI_EAT_DATA_DIR 指向 data/recipes，故取其父目录下的 settings.json
 export function settingsFilePath(): string {
@@ -29,14 +30,6 @@ export async function readSettings(): Promise<Settings> {
 // 避免把坏数据落盘后下次读取被迫回落默认
 export async function writeSettings(settings: Settings): Promise<void> {
   settingsSchema.parse(settings)
-  const file = settingsFilePath()
-  const tmp = `${file}.tmp`
-  try {
-    await fs.mkdir(path.dirname(file), { recursive: true })
-    await fs.writeFile(tmp, JSON.stringify(settings, null, 2) + '\n', 'utf8')
-    await fs.rename(tmp, file)
-  } finally {
-    // 成功时 tmp 已被 rename，rm 为 no-op；失败时清理残留
-    await fs.rm(tmp, { force: true }).catch(() => {})
-  }
+  // 与菜谱库共用同一个原子写原语（随机临时名，防并发互踩）
+  await atomicWriteFile(settingsFilePath(), JSON.stringify(settings, null, 2) + '\n')
 }

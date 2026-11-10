@@ -2,6 +2,7 @@
 // 数据目录经 process.env.AI_EAT_DATA_DIR 注入临时目录（store 每次调用时读 env，模块顶层默认值不受影响）
 // Task 16 起本接口受守卫保护：PASSWORD 未设时放行（本文件不带 Cookie 直调）；若设 PASSWORD 须带会话 Cookie
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { GET, POST } from './route'
@@ -49,11 +50,23 @@ const rawReq = (text: string) =>
   new Request('http://x', { method: 'POST', body: text, headers: { 'content-type': 'application/json' } })
 
 describe('备份接口 /api/backup', () => {
+
+  it('启用鉴权后未带会话 → GET/POST 均 401', async () => {
+    process.env.PASSWORD = 'test-pw'
+    try {
+      expect((await GET(new Request('http://x/api/backup'))).status).toBe(401)
+      expect(
+        (await POST(new Request('http://x/api/backup', { method: 'POST', body: JSON.stringify({ recipes: [] }), headers: { 'content-type': 'application/json' } }))).status,
+      ).toBe(401)
+    } finally {
+      delete process.env.PASSWORD
+    }
+  })
   let dir: string
 
   beforeEach(async () => {
-    dir = await fs.mkdtemp('/tmp/opencode/ai-eat-backup-')
-    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享 /tmp/opencode/logs
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-backup-'))
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享日志目录
   })
 
   afterEach(async () => {
