@@ -28,26 +28,38 @@ export default function BottomNav() {
     href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`)
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-50 flex h-14 items-stretch border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-      {NAV_ITEMS.map((item) => {
-        const active = isActive(item.href)
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            aria-current={active ? 'page' : undefined}
-            className={`flex min-h-[44px] flex-1 items-center justify-center text-sm transition-colors ${
-              // 选中态：颜色加深 + 字重 500→600 双重强调（仅加粗不改变 flex-1 等分槽位，
-              // 文字居中展开，不会造成导航项位移）
-              active
-                ? 'font-semibold text-black dark:text-white'
-                : 'text-neutral-500 hover:text-black dark:hover:text-white'
-            }`}
-          >
-            {item.label}
-          </Link>
-        )
-      })}
+    /* 外层固定底部、全宽背景与上边框（视觉上是一条通栏分隔线）。
+       h-14 必须留在外层：放进内层后 border-t 的 1px 会落在高度之外，
+       导航总高变 57px，与 layout 里 pb-14（56px）的预留对不上。
+       内层用与页面内容相同的 mx-auto max-w-3xl 约束四等分槽位——
+       否则桌面宽屏（如 1440px）会出现 768px 居中内容 + 1425px 通栏导航，
+       四个 tab 被拉到每格 356px，与内容脱节。
+       不加 px-4：max-w-3xl(768) 已大于手机视口，手机端渲染与改动前一致。 */
+    <nav
+      aria-label="底部导航"
+      className="fixed inset-x-0 bottom-0 z-50 h-14 border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900"
+    >
+      <div className="mx-auto flex h-full max-w-3xl items-stretch">
+        {NAV_ITEMS.map((item) => {
+          const active = isActive(item.href)
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={active ? 'page' : undefined}
+              className={`flex min-h-[44px] flex-1 items-center justify-center text-sm transition-colors ${
+                // 选中态：颜色加深 + 字重 500→600 双重强调（仅加粗不改变 flex-1 等分槽位，
+                // 文字居中展开，不会造成导航项位移）
+                active
+                  ? 'font-semibold text-black dark:text-white'
+                  : 'text-neutral-500 hover:text-black dark:hover:text-white'
+              }`}
+            >
+              {item.label}
+            </Link>
+          )
+        })}
+      </div>
     </nav>
   )
 }
