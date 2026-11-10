@@ -15,6 +15,13 @@ export const NAV_ITEMS: { href: string; label: string }[] = [
 // 底部导航默认组件：固定底部，单项触控高度不小于 44px，当前路由项高亮
 export default function BottomNav() {
   const pathname = usePathname()
+  // 访问记录（/access-logs）是隐藏页，不属于四个 tab 任意一个：
+  // 1) 渲染出来四个 tab 全不高亮，用户会疑惑「我在哪」；
+  // 2) 从该页点任一 tab 离开都是 push，会把 /access-logs 写进历史栈——
+  //    之后不知情的人按「后退」就能直接落到隐藏页，绕过连点手势（实测复现过）。
+  // 该页有自己的「返回设置」出口，不依赖底部导航。
+  if (pathname === '/access-logs') return null
+
   // 审计 #22：子路径也点亮所属 tab（/recipes/[id] → 菜谱库）；'/' 特殊——只精确匹配置信，
   // 否则全站路径都以 '/' 开头会导致四个 tab 全亮
   const isActive = (href: string) =>

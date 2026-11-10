@@ -453,10 +453,13 @@ export default function SettingsPage() {
       </section>
 
       {/* 访问记录入口：默认隐藏；在「访问鉴权」卡连点 5 次后显示（内存态，刷新即回隐藏）。
-          显示时作为状态组组尾卡（底部圆角），与上两卡贴合无间隔 */}
+          显示时作为状态组组尾卡（底部圆角），与上两卡贴合无间隔。
+          replace：把当前 /settings 历史项替换为 /access-logs，而不是新增一条——
+          否则用过一次后，不知情的人按「后退」就能直接落到访问记录页，绕开连点手势 */}
       {accessLogsVisible && (
         <Link
           href="/access-logs"
+          replace
           className="block rounded-b-xl border border-neutral-200 p-4 transition-colors active:bg-neutral-50 dark:border-neutral-800 dark:active:bg-neutral-900"
         >
           <div className="flex items-center justify-between gap-2">

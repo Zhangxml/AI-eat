@@ -93,13 +93,18 @@ export default function AccessLogsPage() {
             onClick={() => void refresh()}
             disabled={loading}
             aria-label="刷新访问记录"
-            className="shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
+            className="inline-flex min-h-[44px] shrink-0 items-center rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
           >
             {loading ? '刷新中…' : '刷新'}
           </button>
+          {/* replace：不把 /access-logs 留在历史栈里（配合设置页入口的 replace），
+              否则「返回设置」会重新写入一条 /access-logs，后退又能直接回到这里 */}
           <Link
             href="/settings"
-            className="shrink-0 text-sm text-neutral-500 transition-colors active:text-neutral-900 dark:text-neutral-400 dark:active:text-neutral-100"
+            replace
+            // min-h-[44px] + inline-flex 居中：本页不渲染底部导航，这里是唯一出口，
+            // 触摸目标须满足移动端 44px 约束（原实现实测仅 56×20）
+            className="inline-flex min-h-[44px] shrink-0 items-center text-sm text-neutral-500 transition-colors active:text-neutral-900 dark:text-neutral-400 dark:active:text-neutral-100"
           >
             返回设置
           </Link>
