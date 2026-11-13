@@ -271,7 +271,9 @@ export default function SettingsPage() {
                   onClick={() => void changeStyle(opt.key)}
                   aria-pressed={settings.style === opt.key}
                   disabled={savingStyle}
-                  className={`min-h-[36px] rounded-full border px-4 py-1 text-sm transition-colors disabled:opacity-60 ${
+                  // 与菜谱库筛选 chips 统一规格：32px 高 + rounded-md（原 rounded-full 胶囊显得过圆）
+                  // focus-visible 必填：UA 默认焦点环取 currentColor，选中 chip 文字与底色反色 → 环不可见
+                  className={`inline-flex min-h-[32px] items-center rounded-md border px-3 text-sm transition-[background-color,border-color,color] disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-900 dark:focus-visible:outline-neutral-100 ${
                     settings.style === opt.key
                       ? 'border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900'
                       : 'border-neutral-300 bg-white text-neutral-600 active:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:active:bg-neutral-800'

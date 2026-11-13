@@ -171,7 +171,7 @@ export default function RecipesPage() {
             <button
               type="button"
               onClick={clearFilters}
-              className="mt-3 inline-flex min-h-[36px] items-center rounded-full border border-neutral-300 px-4 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800"
+              className="mt-3 inline-flex min-h-[36px] items-center rounded-md border border-neutral-300 px-4 text-sm text-neutral-600 transition-[background-color,border-color,color] active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-900 dark:focus-visible:outline-neutral-100"
             >
               清除筛选
             </button>

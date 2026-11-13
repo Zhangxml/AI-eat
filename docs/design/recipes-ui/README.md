@@ -48,10 +48,17 @@ RecipeForm({ initial?: Recipe; onSubmit: (draft) => Promise<Response>; submitLab
   - **标签行随分类收敛**：`facets.tags` 由后端按当前分类算出，选「荤菜」后只显示荤菜里出现过的标签——避免点出必然为空的组合（用真实数据实测：固定全量时 4 分类 × 32 标签共 128 种组合中有 **88 种（69%）为空**）
   - **切分类后旧标签失效会自动回退「全部」**（`resolveTagAfterCategoryChange`）：否则会出现「选中的标签已从列表消失、结果却仍被它过滤」的幽灵状态
 - **空态说明具体条件**并给「清除筛选」按钮：「没有同时满足「主食」+「下饭菜」的菜谱」——组合筛选下只说「没有匹配」会让人分不清是搜索词还是筛选的问题
-- 横滑的细节：标题 `shrink-0` 固定左侧 / 隐藏滚动条 / `overscroll-behavior-x: contain` / chip 高 36px（轻量档，低于主规格 44px）
+- 横滑的细节：标题 `shrink-0` 固定左侧 / 隐藏滚动条 / `overscroll-behavior-x: contain` / chip 规格 32px 高 + `rounded-md`（轻量档，低于主规格 44px；原 36px + 胶囊圆角显得又高又圆，已按反馈收紧）/ 行标题加粗深色以突出「这是哪一维度」
   - **右侧渐隐按需显示**：仅当「确实可滑且未到右端」才挂 mask（`ResizeObserver` + `onScroll` 同步）——无条件挂会把本来装得下的分类行最后一个 chip 切掉一角
   - **选中项自动滚入视野**：只滚横滑容器本身（`scrollTo`），不用 `scrollIntoView`——后者在元素位于视口外时会把整页纵向滚过去（实测过）
 - 「点已选中项」一律无反应（含「全部」）：取消筛选请点「全部」，避免误触清掉筛选
+- **键盘焦点环必须显式声明**：UA 默认焦点环取 `currentColor`，而选中 chip 的文字与底色互为反色，
+  环会被「同色吃掉」（实测不可见）。统一用 `focus-visible:outline-2 outline-offset-2 outline-neutral-900`
+  （dark 用 `neutral-100`）；同时**不能**用 `transition-colors`——它包含 `outline-color`，
+  会让焦点环从 `currentColor` 渐变到目标色、聚焦瞬间看不见
+- **横滑容器必须留 4px 内边距**：焦点环需要 chip 外侧 4px（offset 2 + 宽 2）空间，
+  而 `overflow-x-auto` 会把 `overflow-y` 也算成 `auto`，导致上/左整条环完全消失、下方只剩残片（实测对照）。
+  实现用 `p-1 -m-1`：内边距留空间、负外边距抵消，视觉位置与行高不变
 - **分类与标签两个维度互不牵连**：切分类绝不清标签。该不变量由 `reduceDimensions`（`src/lib/recipe-filter-state.ts`）保证并有单测；若新分类下旧标签失效，由 facets 校正逻辑回退
 - 桌面**不提供左右箭头**（按需确认过）：分类行在 390px 以上通常无需滑动（实测 390px 下内容宽 307px == 容器宽 307px），标签行需要时用 Shift+滚轮 或触控板横滑
 
@@ -81,7 +88,7 @@ RecipeForm({ initial?: Recipe; onSubmit: (draft) => Promise<Response>; submitLab
 - 一套表单覆盖录入/编辑两场景，AI 回填让「录入 20 分钟」变成「核对 2 分钟」
 - 全站按钮/间距规格统一（主操作实心 44px+ / 行内次级描边 34px / chips 轻量）
 - 竞态防护、裸形状解析、剥离逻辑等历史 bug 均有测试或冒烟证据锁定
-- 移动端三约束（44px 触摸、16px 输入、无横滚）有样式证据；**筛选 chips 为 36px**，是「轻量 chips」档的显式例外（用户确认，避免挤压列表可视区）
+- 移动端三约束（44px 触摸、16px 输入、无横滚）有样式证据；**筛选 chips 为 32px + `rounded-md`**，是「轻量 chips」档的显式例外（用户确认，避免挤压列表可视区）；设置页「推荐风格」chips 同为 32px；「清除筛选」用 36px（空态唯一出口，不随 chips 一起收小，但仍统一 `rounded-md` 圆角）
 
 **缺点与已知边界**
 
