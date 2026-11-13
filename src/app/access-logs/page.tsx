@@ -87,14 +87,16 @@ export default function AccessLogsPage() {
       {/* 页头：标题 + 刷新（页内不再放「返回设置」，出口交给底部导航的设置 tab） */}
       <header className="mb-4 flex items-center justify-between gap-2">
         <h1 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">访问记录</h1>
-        {/* 刷新按钮：边框用 neutral-300（原 neutral-900 纯黑太重）+ 紧一点的内边距，
-            整体更轻巧；高度仍 44px 以满足触摸约束 */}
+        {/* 刷新按钮：与菜谱库「分类 / 标签」chips 同规格——32px 高、rounded-md(6px)、px-3、
+            1px neutral-300 边框、白/深灰底（chips 未选中态同款）——深色模式下若不加底色，
+            按钮会透出页面底色，比 chip 暗一档。页头这一行只有标题 + 这一个轻量控件，保持一致更整齐。
+            （触摸目标 32px 仍高于 WCAG 2.5.8 要求的 24px；主操作按钮仍是 44px 档） */}
         <button
           type="button"
           onClick={() => void refresh()}
           disabled={loading}
           aria-label="刷新访问记录"
-          className="inline-flex min-h-[44px] shrink-0 items-center rounded-lg border border-neutral-300 px-2.5 text-sm text-neutral-600 transition-colors active:bg-neutral-100 disabled:text-neutral-400 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800 dark:disabled:text-neutral-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-900 dark:focus-visible:outline-neutral-100"
+          className="inline-flex min-h-[32px] shrink-0 items-center rounded-md border border-neutral-300 bg-white px-3 text-sm text-neutral-600 transition-[background-color,border-color,color] active:bg-neutral-100 disabled:text-neutral-400 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:active:bg-neutral-800 dark:disabled:text-neutral-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-900 dark:focus-visible:outline-neutral-100"
         >
           {loading ? '刷新中…' : '刷新'}
         </button>
