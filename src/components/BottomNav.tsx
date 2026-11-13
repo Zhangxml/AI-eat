@@ -3,6 +3,7 @@
 // BottomNav：固定在底部的全局导航，覆盖首页 / 菜谱库 / 点菜 / 设置四个入口
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { isHiddenSettingsPage, isNavActive } from '@/lib/nav-active'
 
 // 导航项数据：顺序即展示顺序，href 需与 App Router 路由一一对应
 export const NAV_ITEMS: { href: string; label: string }[] = [
@@ -16,16 +17,12 @@ export const NAV_ITEMS: { href: string; label: string }[] = [
 export default function BottomNav() {
   const pathname = usePathname()
   // 访问记录（/access-logs）是隐藏页，不属于四个 tab 任意一个：
-  // 1) 渲染出来四个 tab 全不高亮，用户会疑惑「我在哪」；
-  // 2) 从该页点任一 tab 离开都是 push，会把 /access-logs 写进历史栈——
-  //    之后不知情的人按「后退」就能直接落到隐藏页，绕过连点手势（实测复现过）。
-  // 该页有自己的「返回设置」出口，不依赖底部导航。
-  if (pathname === '/access-logs') return null
-
-  // 审计 #22：子路径也点亮所属 tab（/recipes/[id] → 菜谱库）；'/' 特殊——只精确匹配置信，
-  // 否则全站路径都以 '/' 开头会导致四个 tab 全亮
-  const isActive = (href: string) =>
-    href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`)
+  // - 它靠「设置」进入，所以把「设置」点亮，告诉用户自己在哪一层
+  // - 从该页离开时必须用 replace：push 会把 /access-logs 写进历史栈，
+  //   之后不知情的人按「后退」就能直接落到隐藏页，绕过连点手势（曾实测复现）
+  // 判定逻辑抽在 src/lib/nav-active.ts（有单测）
+  const onHiddenPage = isHiddenSettingsPage(pathname)
+  const isActive = (href: string) => isNavActive(pathname, href)
 
   return (
     /* 外层固定底部、全宽背景与上边框（视觉上是一条通栏分隔线）。
@@ -46,7 +43,11 @@ export default function BottomNav() {
             <Link
               key={item.href}
               href={item.href}
-              aria-current={active ? 'page' : undefined}
+              // 从隐藏页离开用 replace：不把它留在历史栈里（否则后退可绕过手势直达）
+              replace={onHiddenPage}
+              // 隐藏页上「设置」只是所在层级、并非当前页：用 "true"（集合内的当前项）而非
+              // "page"，否则读屏会播报「设置 当前页」而实际停在「访问记录」
+              aria-current={active ? (onHiddenPage ? 'true' : 'page') : undefined}
               className={`flex min-h-[44px] flex-1 items-center justify-center text-sm transition-colors ${
                 // 选中态：颜色加深 + 字重 500→600 双重强调（仅加粗不改变 flex-1 等分槽位，
                 // 文字居中展开，不会造成导航项位移）

@@ -1,11 +1,11 @@
 'use client'
 
-// 访问记录列表页（/access-logs）：从设置页进入，展示敏感操作审计日志
+// 访问记录列表页（/access-logs）：从设置页连点手势进入，展示敏感操作审计日志
+// 出口：底部导航（本页不属于任何 tab，但把「设置」点亮表示层级；离开用 replace 防历史泄漏）
 // 数据契约：GET /api/access-logs → 200 { logs: [{ time, ip, method, path, status }] }（最新在前）
 // 交互：进入拉取一次（读操作不写日志，无轮询必要）；「刷新」手动重拉；空态/错误态/加载态三态
 // 移动端三约束：条目单列、触摸目标 ≥44px、无横滚（长路径 break-all）
 import { useCallback, useEffect, useState } from 'react'
-import Link from 'next/link'
 import { apiFetch } from '@/lib/api-fetch'
 
 // 日志条目契约（与 src/lib/access-log.ts 的 AccessLogEntry 一致）
@@ -84,31 +84,20 @@ export default function AccessLogsPage() {
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
-      {/* 页头：标题 + 刷新 + 返回设置 */}
+      {/* 页头：标题 + 刷新（页内不再放「返回设置」，出口交给底部导航的设置 tab） */}
       <header className="mb-4 flex items-center justify-between gap-2">
         <h1 className="text-lg font-medium text-neutral-900 dark:text-neutral-100">访问记录</h1>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            disabled={loading}
-            aria-label="刷新访问记录"
-            className="inline-flex min-h-[44px] shrink-0 items-center rounded-lg border border-neutral-900 px-3 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500"
-          >
-            {loading ? '刷新中…' : '刷新'}
-          </button>
-          {/* replace：不把 /access-logs 留在历史栈里（配合设置页入口的 replace），
-              否则「返回设置」会重新写入一条 /access-logs，后退又能直接回到这里 */}
-          <Link
-            href="/settings"
-            replace
-            // min-h-[44px] + inline-flex 居中：本页不渲染底部导航，这里是唯一出口，
-            // 触摸目标须满足移动端 44px 约束（原实现实测仅 56×20）
-            className="inline-flex min-h-[44px] shrink-0 items-center text-sm text-neutral-500 transition-colors active:text-neutral-900 dark:text-neutral-400 dark:active:text-neutral-100"
-          >
-            返回设置
-          </Link>
-        </div>
+        {/* 刷新按钮：边框用 neutral-300（原 neutral-900 纯黑太重）+ 紧一点的内边距，
+            整体更轻巧；高度仍 44px 以满足触摸约束 */}
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={loading}
+          aria-label="刷新访问记录"
+          className="inline-flex min-h-[44px] shrink-0 items-center rounded-lg border border-neutral-300 px-2.5 text-sm text-neutral-600 transition-colors active:bg-neutral-100 disabled:text-neutral-400 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800 dark:disabled:text-neutral-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-900 dark:focus-visible:outline-neutral-100"
+        >
+          {loading ? '刷新中…' : '刷新'}
+        </button>
       </header>
 
       {/* 说明条：记录范围（方案 A）——写操作/AI 调用/登录尝试，普通读请求不记 */}

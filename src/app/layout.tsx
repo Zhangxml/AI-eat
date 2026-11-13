@@ -35,9 +35,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {/* pb-14 预留底部导航高度，避免内容被固定导航遮挡。
-            注意：/access-logs 不渲染底部导航（隐藏页），该路由会多出 56px 尾部留白——
-            属可接受代价，为它单独做条件 padding 需要把布局改成 client 侧判断，不值得 */}
+        {/* pb-14 预留底部导航高度（56px），避免内容被固定导航遮挡。
+            所有路由（含 /access-logs）都渲染底部导航，该预留对所有页面生效 */}
         <div className="pb-14">{children}</div>
         <BottomNav />
       </body>
