@@ -9,7 +9,7 @@
 
 菜谱库的人机界面，覆盖完整 CRUD：
 
-- **列表页** `/recipes`：全部菜谱（updatedAt 降序）、按名称/食材搜索（300ms 防抖）、按标签 chips 过滤、非法文件告警条、右下角浮动 + 进入录入
+- **列表页** `/recipes`：全部菜谱（updatedAt 降序）、按名称/食材搜索（300ms 防抖）、**分类 / 标签两行横滑筛选**、非法文件告警条、右下角浮动 + 进入录入
 - **录入页** `/recipes/new`：人工表单录入；**AI 生成**——只填名称点按钮，整份菜谱回填表单，核对修改后手动保存
 - **详情页** `/recipes/[id]`：四态渲染（加载/详情/404/错误）、编辑（复用表单）、删除（可选密码保护，见 auth 模块文档）
 
@@ -41,7 +41,28 @@ RecipeForm({ initial?: Recipe; onSubmit: (draft) => Promise<Response>; submitLab
 
 - 搜索防抖 300ms + `requestIdRef` 竞态防护（快速输入时旧响应丢弃，不覆盖新结果）
 - `!res.ok` 与网络异常都有错误条（HTTP 级失败不再静默保旧列表）
-- 标签 chips 来自当前结果集聚合，点击切换/取消过滤
+- **筛选区两行**：分类一行、标签一行，各自单行横滑（`src/components/FilterRow.tsx`）
+  - 两行首项都是「全部」（对应 `null` = 该维度不筛选），默认选中
+  - 行内**单选**：点新的替换旧的；点已选中项无反应（取消请点「全部」，防误触清掉筛选）
+  - **跨行取交集**：分类 + 标签 + 搜索词三者同时生效
+  - **标签行随分类收敛**：`facets.tags` 由后端按当前分类算出，选「荤菜」后只显示荤菜里出现过的标签——避免点出必然为空的组合（用真实数据实测：固定全量时 4 分类 × 32 标签共 128 种组合中有 **88 种（69%）为空**）
+  - **切分类后旧标签失效会自动回退「全部」**（`resolveTagAfterCategoryChange`）：否则会出现「选中的标签已从列表消失、结果却仍被它过滤」的幽灵状态
+- **空态说明具体条件**并给「清除筛选」按钮：「没有同时满足「主食」+「下饭菜」的菜谱」——组合筛选下只说「没有匹配」会让人分不清是搜索词还是筛选的问题
+- 横滑的细节：标题 `shrink-0` 固定左侧 / 隐藏滚动条 / `overscroll-behavior-x: contain` / chip 高 36px（轻量档，低于主规格 44px）
+  - **右侧渐隐按需显示**：仅当「确实可滑且未到右端」才挂 mask（`ResizeObserver` + `onScroll` 同步）——无条件挂会把本来装得下的分类行最后一个 chip 切掉一角
+  - **选中项自动滚入视野**：只滚横滑容器本身（`scrollTo`），不用 `scrollIntoView`——后者在元素位于视口外时会把整页纵向滚过去（实测过）
+- 「点已选中项」一律无反应（含「全部」）：取消筛选请点「全部」，避免误触清掉筛选
+- **分类与标签两个维度互不牵连**：切分类绝不清标签。该不变量由 `reduceDimensions`（`src/lib/recipe-filter-state.ts`）保证并有单测；若新分类下旧标签失效，由 facets 校正逻辑回退
+- 桌面**不提供左右箭头**（按需确认过）：分类行在 390px 以上通常无需滑动（实测 390px 下内容宽 307px == 容器宽 307px），标签行需要时用 Shift+滚轮 或触控板横滑
+
+### 接口契约变更
+
+`GET /api/recipes?q=&category=&tag=` → `200 { recipes, invalidFiles, facets }`
+
+`facets: { categories: string[]; tags: string[] }`——只增字段不删，旧客户端忽略多余字段即可。
+- `categories`：只含**实际存在**的分类，按固定顺序（荤菜→素菜→汤→主食→其他）
+- `tags`：指定 `category` 时只返回该分类内的标签（按该分类内频次降序）；未指定时返回全量
+- facets 与结果用**同一份 `listRecipes` 快照**计算，不会因并发改库而与列表错位
 
 ## 为什么这么做
 
@@ -60,19 +81,19 @@ RecipeForm({ initial?: Recipe; onSubmit: (draft) => Promise<Response>; submitLab
 - 一套表单覆盖录入/编辑两场景，AI 回填让「录入 20 分钟」变成「核对 2 分钟」
 - 全站按钮/间距规格统一（主操作实心 44px+ / 行内次级描边 34px / chips 轻量）
 - 竞态防护、裸形状解析、剥离逻辑等历史 bug 均有测试或冒烟证据锁定
-- 移动端三约束（44px 触摸、16px 输入、无横滚）有样式证据
+- 移动端三约束（44px 触摸、16px 输入、无横滚）有样式证据；**筛选 chips 为 36px**，是「轻量 chips」档的显式例外（用户确认，避免挤压列表可视区）
 
 **缺点与已知边界**
 
 - toDraft 在 ChatView 与点菜页各有一份（30 行级重复，第三处消费者出现时应提取——已知 deferred）
 - 步骤/食材行 key 用数组索引（无重排场景，删除中间行时焦点不跟随语义行，纯 UX）
-- 列表全量拉取后客户端过滤（规模大后需服务端分页）
+- 列表由服务端按 q/category/tag 过滤后返回（仅失效文件告警与排序在前端无关）（规模大后需服务端分页）
 - 详情页时间戳（createdAt/updatedAt）未展示（产品口径取舍）
 
 ## 架构位置
 
 ```
-列表页 ──GET /api/recipes?q&tag──► recipe-store.filterRecipes
+列表页 ──GET /api/recipes?q&category&tag（+ buildFacets）──► recipe-store.filterRecipes
 录入页 ──RecipeForm──► POST /api/recipes（manual）──┐
 详情页 ──GET/PUT/DELETE /api/recipes/:id ──────────┤
 AI 回填 ──POST /api/ai/recipes { dish } ───────────┘（只回填表单）

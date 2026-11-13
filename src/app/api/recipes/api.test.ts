@@ -36,6 +36,59 @@ describe('菜谱库 REST API', () => {
     delete process.env.AI_EAT_DATA_DIR
   })
 
+  it('GET 返回 facets（分类行全量、标签行随 category 收敛），并支持 category 过滤', async () => {
+    const drafts = [
+      { ...goodDraft, name: '红烧肉', category: '荤菜' as const, tags: ['家常菜', '下饭菜'] },
+      { ...goodDraft, name: '青椒肉丝', category: '荤菜' as const, tags: ['家常菜', '快手菜'] },
+      { ...goodDraft, name: '番茄蛋汤', category: '汤' as const, tags: ['清淡'] },
+      { ...goodDraft, name: '蛋炒饭', category: '主食' as const, tags: ['快手菜'] },
+    ]
+    for (const d of drafts) expect((await createR(json(d))).status).toBe(201)
+
+    // 无筛选：categories 按固定顺序，tags 全量按频次降序
+    const allRes = await listR(new Request('http://x/api/recipes'))
+    const all = (await allRes.json()) as {
+      recipes: unknown[]
+      facets: { categories: string[]; tags: string[] }
+    }
+    expect(all.recipes).toHaveLength(4)
+    expect(all.facets.categories).toEqual(['荤菜', '汤', '主食'])
+    // 家常菜与快手菜都是 2 次，同频按字典序 → 「家常菜」在前
+    expect(all.facets.tags.slice(0, 2)).toEqual(['家常菜', '快手菜'])
+    expect(all.facets.tags).toContain('清淡')
+
+    // 指定 category=荤菜：结果只剩 2 道，tags 收敛（不含汤/主食独有的「清淡」）
+    const meatRes = await listR(new Request('http://x/api/recipes?category=荤菜'))
+    const meat = (await meatRes.json()) as {
+      recipes: unknown[]
+      facets: { categories: string[]; tags: string[] }
+    }
+    expect(meat.recipes).toHaveLength(2)
+    expect(meat.facets.categories).toEqual(['荤菜', '汤', '主食']) // 分类行不收敛
+    expect(meat.facets.tags).not.toContain('清淡')
+    expect(new Set(meat.facets.tags)).toEqual(new Set(['家常菜', '下饭菜', '快手菜']))
+
+    // category 空串 = 全部（不报错、不过滤）
+    const blankRes = await listR(new Request('http://x/api/recipes?category='))
+    expect(((await blankRes.json()) as { recipes: unknown[] }).recipes).toHaveLength(4)
+
+    // category + tag 交集
+    const bothRes = await listR(new Request('http://x/api/recipes?category=荤菜&tag=下饭菜'))
+    const both = (await bothRes.json()) as {
+      recipes: { name: string }[]
+      facets: { tags: string[] }
+    }
+    expect(both.recipes.map(r => r.name)).toEqual(['红烧肉'])
+    // 关键：facets.tags 只受 category 影响，**不受当前 tag 影响**——
+    // 若误用过滤后的结果算 facets，选中标签后标签行会塌缩成只剩它自己，无法切换
+    expect(new Set(both.facets.tags)).toEqual(new Set(['家常菜', '下饭菜', '快手菜']))
+
+    // 同理：facets.tags 不受搜索词影响
+    const qRes = await listR(new Request('http://x/api/recipes?q=红烧肉'))
+    const q = (await qRes.json()) as { facets: { tags: string[] } }
+    expect(q.facets.tags).toContain('清淡') // 清淡只在汤里，搜索红烧肉（荤菜）也仍在 facets
+  })
+
   it('POST 创建并 GET 列表拿到', async () => {
     const res = await createR(json(goodDraft))
     expect(res.status).toBe(201)

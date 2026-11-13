@@ -120,14 +120,21 @@ export async function putRecipe(recipe: Recipe, dir: string = recipesDir()): Pro
   await atomicWriteFile(path.join(dir, `${recipe.id}.json`), JSON.stringify(recipe, null, 2))
 }
 
-// 纯函数过滤：q 大小写不敏感匹配名称或任一食材名 includes；tag 精确匹配；两者同时给定时取交集
+// 分类展示顺序：固定语义顺序（荤→素→汤→主食→其他），不按数量排序——
+// 分类是枚举而非热度榜，顺序稳定才符合直觉
+export const CATEGORY_ORDER = ['荤菜', '素菜', '汤', '主食', '其他'] as const
+
+// 纯函数过滤：q 大小写不敏感匹配名称或任一食材名；category 与 tag 精确匹配；
+// 三者同时给定时取交集（任一维度为空/空白则忽略该维度）
 export function filterRecipes(
   recipes: Recipe[],
-  opts: { q?: string; tag?: string },
+  opts: { q?: string; category?: string; tag?: string },
 ): Recipe[] {
   const q = opts.q?.trim().toLowerCase()
-  const tag = opts.tag?.trim()
+  const tag = opts.tag?.trim() || undefined
+  const category = opts.category?.trim() || undefined
   return recipes.filter(r => {
+    if (category !== undefined && r.category !== category) return false
     if (tag !== undefined && !r.tags.includes(tag)) return false
     if (q) {
       const hitName = r.name.toLowerCase().includes(q)
@@ -136,4 +143,28 @@ export function filterRecipes(
     }
     return true
   })
+}
+
+// 筛选面板数据（facets）：给前端渲染「分类」「标签」两行 chips 用。
+// 关键语义：tags 随 category 收敛——选定分类后只返回该分类内实际出现过的标签，
+// 避免用户点出「主食 + 下饭菜」这类必然为空的组合（实测真实数据里 69% 的分类×标签组合为空）。
+// categories 则始终返回全量实际存在的分类：分类行不随自身选择收敛，否则切走就回不来了。
+export function buildFacets(
+  recipes: Recipe[],
+  category?: string,
+): { categories: string[]; tags: string[] } {
+  const present = new Set(recipes.map(r => r.category).filter((c): c is NonNullable<typeof c> => c !== undefined))
+  const categories = CATEGORY_ORDER.filter(c => present.has(c))
+
+  // tags 统计范围：指定分类时只看该分类内的菜谱
+  const scope = category === undefined ? recipes : recipes.filter(r => r.category === category)
+  const counts = new Map<string, number>()
+  for (const r of scope) {
+    for (const t of r.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
+  }
+  const tags = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([t]) => t)
+
+  return { categories, tags }
 }

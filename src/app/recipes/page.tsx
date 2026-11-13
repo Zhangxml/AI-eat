@@ -1,27 +1,33 @@
 'use client'
 
-// 菜谱库列表页：搜索（300ms 防抖）+ 标签 chips 过滤 + 列表渲染 + 空态 + 新增浮动按钮
-import { useCallback, useEffect, useRef, useState } from 'react'
+// 菜谱库列表页：搜索（300ms 防抖）+ 分类/标签两行横滑筛选 + 列表渲染 + 空态 + 新增浮动按钮
+// 筛选语义：分类与标签各为单选维度，值为 null 表示「全部」；与搜索词三者取交集。
+// 标签行随分类收敛（facets 由后端算），避免点出必然为空的组合（真实数据里 69% 的分类×标签组合为空）。
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import Link from 'next/link'
 import RecipeListItem from '@/components/RecipeListItem'
+import FilterRow from '@/components/FilterRow'
 import { apiFetch } from '@/lib/api-fetch'
+import { describeFilters, initialDimensions, reduceDimensions } from '@/lib/recipe-filter-state'
 import type { Recipe } from '@/lib/recipe-types'
 
-// 响应契约：GET /api/recipes?q=&tag= → 200 { recipes, invalidFiles }
+// 响应契约：GET /api/recipes?q=&category=&tag= → 200 { recipes, invalidFiles, facets }
 interface ListResponse {
   recipes: Recipe[]
   invalidFiles: string[]
+  // facets：分类行全量（实际存在的）、标签行随 category 收敛
+  facets: { categories: string[]; tags: string[] }
 }
-
-// 标签 chips 默认展示上限：标签来源（AI 生成/人工录入）不可控、数量可能无限多，
-// 只默认展示使用频次最高的前 N 个，其余折叠进「更多」（选中态标签强制显示，见渲染处注释）
-const TAG_CHIPS_LIMIT = 10
 
 export default function RecipesPage() {
   // 搜索框受控值（立即回显）；q 为防抖后的实际请求参数
   const [inputValue, setInputValue] = useState('')
   const [q, setQ] = useState('')
-  const [tag, setTag] = useState<string | null>(null)
+  // 筛选状态（分类 + 标签两个维度，null = 「全部」）交给纯 reducer：
+  // 「切分类不动标签」这条不变量由 reduceDimensions 保证并有单测锁定，
+  // 避免以前那种「点分类的『全部』顺手把标签清了」的跨行耦合回归。
+  const [dims, dispatchDims] = useReducer(reduceDimensions, initialDimensions)
+  const { category, tag } = dims
   const [recipes, setRecipes] = useState<Recipe[]>([])
   const [invalidFiles, setInvalidFiles] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -30,20 +36,25 @@ export default function RecipesPage() {
   // 竞态防护：只接受最后一次请求的结果，防止乱序响应覆盖新结果
   const requestIdRef = useRef(0)
 
-  // 标签 chips 数据：从当前返回的全量列表（无 tag 过滤时）聚合 tag 去重，并按使用频次降序——
-  // 高频标签才是有筛选价值的，低频长尾折进「更多」
-  const [allTags, setAllTags] = useState<string[]>([])
-  // 「更多」展开状态：默认收起只显示前 TAG_CHIPS_LIMIT 个
-  const [showAllTags, setShowAllTags] = useState(false)
+  // 筛选面板数据（由后端 facets 提供）：分类行全量、标签行随分类收敛
+  const [facets, setFacets] = useState<{ categories: string[]; tags: string[] }>({
+    categories: [],
+    tags: [],
+  })
 
   // 拉取菜谱列表：q/tag 变化都会触发
-  const loadRecipes = useCallback(async (query: string, activeTag: string | null) => {
+  const loadRecipes = useCallback(async (
+    query: string,
+    activeCategory: string | null,
+    activeTag: string | null,
+  ) => {
     const id = ++requestIdRef.current
     setLoading(true)
     setLoadError('')
     try {
       const params = new URLSearchParams()
       if (query.trim()) params.set('q', query.trim())
+      if (activeCategory) params.set('category', activeCategory)
       if (activeTag) params.set('tag', activeTag)
       const res = await apiFetch(`/api/recipes?${params.toString()}`)
       // 非 2xx：顶部错误条展示 HTTP 码（审计修复 #11——此前静默 return，列表停在旧数据/空态无任何提示）
@@ -56,14 +67,8 @@ export default function RecipesPage() {
       if (id !== requestIdRef.current) return
       setRecipes(data.recipes)
       setInvalidFiles(data.invalidFiles)
-      // 仅在无标签过滤时聚合全量标签：统计每个 tag 的使用次数，按频次降序排列
-      if (!activeTag) {
-        const counts = new Map<string, number>()
-        for (const r of data.recipes) {
-          for (const t of r.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
-        }
-        setAllTags([...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t))
-      }
+      // facets 直接来自后端（一次请求算好，chips 不会因并发改库与实际数据错位）
+      if (data.facets) setFacets(data.facets)
     } catch {
       // 网络异常（T5 遗留补齐）：置顶部错误条文案；过期响应不覆盖新状态
       if (id === requestIdRef.current) setLoadError('加载失败，网络异常，请稍后重试')
@@ -78,12 +83,31 @@ export default function RecipesPage() {
     return () => clearTimeout(timer)
   }, [inputValue])
 
-  // q 或 tag 变化时重新拉取
+  // q / category / tag 任一变化时重新拉取
   useEffect(() => {
-    void loadRecipes(q, tag)
-  }, [q, tag, loadRecipes])
+    void loadRecipes(q, category, tag)
+  }, [q, category, tag, loadRecipes])
 
-  const hasFilters = q.trim() !== '' || tag !== null
+  // 切换分类：若当前标签不在新分类的 facets 里（例如选了「清淡」再切到「荤菜」），
+  // 自动回退「全部」，避免「标签看不见但仍在过滤」的幽灵状态
+  // 切分类只改分类（不变量由 reduceDimensions 保证）；新分类下旧标签若失效，
+  // 由 facets 校正 effect 负责回退，此处不做预判。
+  const handleCategoryChange = useCallback((next: string | null) => {
+    dispatchDims({ type: 'setCategory', value: next })
+  }, [])
+
+  // 响应回来后再校正一次标签有效性（依赖 facets，避免猜错）
+  useEffect(() => {
+    dispatchDims({ type: 'syncFacetTags', facetTags: facets.tags })
+  }, [facets.tags])
+
+  const activeFilters = describeFilters({ q, category, tag })
+  const hasFilters = activeFilters.length > 0
+  const clearFilters = () => {
+    setInputValue('')
+    setQ('')
+    dispatchDims({ type: 'clear' })
+  }
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
@@ -113,48 +137,45 @@ export default function RecipesPage() {
         />
       </div>
 
-      {/* 标签 chips：默认只显示使用频次最高的前 10 个（标签来自 AI/人工录入，数量不可控，
-          全量铺开会把筛选区撑成无限长）；「更多」展开/收起全部。
-          审计修复 #12：渲染列表 = 前 10 个 ∪（该标签被选中时强制并入）——选中态标签收起后仍显示，
-          否则用户点中第 11 位之后的标签再收起，唯一可取消选中的入口会从界面上消失 */}
-      {allTags.length > 0 && (
-        <div className="mb-3 flex flex-wrap gap-2">
-          {((): string[] => {
-            const shown = showAllTags ? allTags : allTags.slice(0, TAG_CHIPS_LIMIT)
-            return tag !== null && !shown.includes(tag) ? [...shown, tag] : shown
-          })().map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTag((prev) => (prev === t ? null : t))}
-              className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                tag === t
-                  ? 'border-neutral-900 bg-neutral-900 text-white dark:border-neutral-100 dark:bg-neutral-100 dark:text-neutral-900'
-                  : 'border-neutral-300 bg-white text-neutral-600 active:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:active:bg-neutral-800'
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-          {allTags.length > TAG_CHIPS_LIMIT && (
-            <button
-              type="button"
-              onClick={() => setShowAllTags((prev) => !prev)}
-              aria-label={showAllTags ? '收起标签' : '展开全部标签'}
-              className="rounded-full border border-dashed border-neutral-300 px-3 py-1 text-sm text-neutral-500 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:active:bg-neutral-800"
-            >
-              {showAllTags ? '收起' : `更多 (${allTags.length - TAG_CHIPS_LIMIT})`}
-            </button>
-          )}
-        </div>
-      )}
+      {/* 筛选区：分类 / 标签各一行、单行横滑；均以「全部」为首项且默认选中。
+          标签行的 options 来自 facets.tags——已随分类收敛，故不会点出必然为空的组合 */}
+      <div className="mb-3 flex flex-col gap-2">
+        <FilterRow
+          label="分类"
+          ariaLabel="按分类筛选"
+          options={facets.categories}
+          value={category}
+          onChange={handleCategoryChange}
+        />
+        <FilterRow
+          label="标签"
+          ariaLabel="按标签筛选"
+          options={facets.tags}
+          value={tag}
+          onChange={(next) => dispatchDims({ type: 'setTag', value: next })}
+        />
+      </div>
 
       {/* 列表主体：加载中 / 空态 / 列表三态 */}
       {loading ? (
         <p className="py-10 text-center text-sm text-neutral-400 dark:text-neutral-500">加载中…</p>
       ) : recipes.length === 0 ? (
         hasFilters ? (
-          <p className="py-10 text-center text-sm text-neutral-400 dark:text-neutral-500">没有匹配的菜谱，换个关键词试试</p>
+          // 明确说明是哪个（些）条件导致空结果，并提供一键清除——
+          // 组合筛选下只说「没有匹配」会让用户不知道是搜索词还是筛选的问题
+          <div className="py-10 text-center">
+            <p className="text-sm text-neutral-400 dark:text-neutral-500">
+              {/* 单条件时说「同时满足」很别扭；只有多条件才用「同时」 */}
+              没有{activeFilters.length > 1 ? '同时' : ''}满足{activeFilters.join(' + ')}的菜谱
+            </p>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="mt-3 inline-flex min-h-[36px] items-center rounded-full border border-neutral-300 px-4 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800"
+            >
+              清除筛选
+            </button>
+          </div>
         ) : (
           <p className="py-10 text-center text-sm text-neutral-400 dark:text-neutral-500">还没有菜谱，去录入一道吧</p>
         )

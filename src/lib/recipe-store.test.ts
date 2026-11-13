@@ -12,6 +12,7 @@ import {
   deleteRecipe,
   putRecipe,
   filterRecipes,
+  buildFacets,
 } from './recipe-store'
 import type { DraftRecipe, Recipe } from './recipe-types'
 
@@ -23,9 +24,17 @@ const goodDraft: DraftRecipe = {
 }
 
 // 构造完整菜谱（putRecipe / filterRecipes / 排序用例）
-function makeRecipe(id: string, name: string, tags: string[], ingredientNames: string[]): Recipe {
+// category 为可选末参：不传则不设该字段（与既有用例保持一致）
+function makeRecipe(
+  id: string,
+  name: string,
+  tags: string[],
+  ingredientNames: string[],
+  category?: Recipe['category'],
+): Recipe {
   return {
     ...goodDraft, name, tags,
+    ...(category !== undefined ? { category } : {}),
     ingredients: ingredientNames.map(n => ({ name: n, amount: '1份' })),
     id,
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -200,5 +209,80 @@ describe('菜谱文件存储', () => {
     expect(filterRecipes(all, { tag: '家' })).toEqual([])
     // q 与 tag 组合过滤
     expect(filterRecipes(all, { q: '番茄', tag: '家常菜' })).toEqual([a])
+  })
+
+  it('filterRecipes：category 精确过滤，且与 q/tag 取交集', () => {
+    const meat = makeRecipe('r-m', '红烧肉', ['家常菜', '下饭菜'], ['五花肉'], '荤菜')
+    const soup = makeRecipe('r-s', '番茄蛋汤', ['家常菜', '清淡'], ['番茄', '鸡蛋'], '汤')
+    const staple = makeRecipe('r-t', '蛋炒饭', ['快手菜'], ['米饭'], '主食')
+    const all = [meat, soup, staple]
+
+    expect(filterRecipes(all, { category: '荤菜' })).toEqual([meat])
+    expect(filterRecipes(all, { category: '不存在的分类' })).toEqual([])
+    // category 为 undefined / 空串：不过滤
+    expect(filterRecipes(all, {})).toEqual(all)
+    expect(filterRecipes(all, { category: undefined })).toEqual(all)
+    expect(filterRecipes(all, { category: '  ' })).toEqual(all)
+
+    // 分类 + 标签 交集：家常菜在荤菜与汤里都有，用分类收窄
+    expect(filterRecipes(all, { category: '荤菜', tag: '家常菜' })).toEqual([meat])
+    expect(filterRecipes(all, { category: '汤', tag: '家常菜' })).toEqual([soup])
+    // 交集为空
+    expect(filterRecipes(all, { category: '主食', tag: '下饭菜' })).toEqual([])
+    // 三条件交集：q 命中食材 + 分类 + 标签
+    expect(filterRecipes(all, { q: '五花肉', category: '荤菜', tag: '下饭菜' })).toEqual([meat])
+    expect(filterRecipes(all, { q: '五花肉', category: '汤', tag: '下饭菜' })).toEqual([])
+  })
+})
+
+describe('buildFacets 筛选面板数据', () => {
+  const meat1 = makeRecipe('r-m1', '红烧肉', ['家常菜', '下饭菜'], ['五花肉'], '荤菜')
+  const meat2 = makeRecipe('r-m2', '青椒肉丝', ['家常菜', '快手菜'], ['猪肉'], '荤菜')
+  const soup = makeRecipe('r-s1', '番茄蛋汤', ['家常菜', '清淡'], ['番茄'], '汤')
+  const staple = makeRecipe('r-p1', '蛋炒饭', ['快手菜'], ['米饭'], '主食')
+  const all = [meat1, meat2, soup, staple]
+
+  it('无分类时：categories 只含实际存在的分类，且按固定顺序（荤菜→素菜→汤→主食→其他）', () => {
+    const { categories } = buildFacets(all)
+    expect(categories).toEqual(['荤菜', '汤', '主食'])
+  })
+
+  it('无分类时：tags 为该范围内全部标签，按频次降序（同频按字典序，保证稳定）', () => {
+    const { tags } = buildFacets(all)
+    // 家常菜 3 次、快手菜 2 次，其余各 1 次
+    expect(tags[0]).toBe('家常菜')
+    expect(tags[1]).toBe('快手菜')
+    expect(tags).toHaveLength(new Set(all.flatMap(r => r.tags)).size)
+    // 同频（都是 1 次）时保持字典序稳定
+    expect(tags.slice(2)).toEqual([...tags.slice(2)].sort((a, b) => a.localeCompare(b)))
+  })
+
+  it('指定分类时：tags 只含该分类内实际出现的标签（按该分类内频次）', () => {
+    const { tags } = buildFacets(all, '荤菜')
+    expect(new Set(tags)).toEqual(new Set(['家常菜', '下饭菜', '快手菜']))
+    // 「清淡」「早餐」这类只在汤/主食里的标签不得出现
+    expect(tags).not.toContain('清淡')
+  })
+
+  it('指定分类时：categories 仍返回全量（分类行不随分类收敛）', () => {
+    expect(buildFacets(all, '荤菜').categories).toEqual(['荤菜', '汤', '主食'])
+  })
+
+  it('空库：categories 与 tags 都为空数组', () => {
+    expect(buildFacets([])).toEqual({ categories: [], tags: [] })
+    expect(buildFacets([], '荤菜')).toEqual({ categories: [], tags: [] })
+  })
+
+  it('菜谱无 category 字段时：不计入 categories，但其余标签照常统计', () => {
+    const noCat = makeRecipe('r-n', '无分类菜', ['野路子'], ['x'])
+    const r = buildFacets([noCat, meat1])
+    expect(r.categories).toEqual(['荤菜'])
+    expect(r.tags).toContain('野路子')
+  })
+
+  it('指定一个不存在的分类：tags 为空、categories 仍全量', () => {
+    const r = buildFacets(all, '其他')
+    expect(r.tags).toEqual([])
+    expect(r.categories).toEqual(['荤菜', '汤', '主食'])
   })
 })

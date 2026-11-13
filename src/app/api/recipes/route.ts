@@ -1,5 +1,5 @@
 // 菜谱库 REST API（列表 + 创建）：薄封装 store，解析查询参数后调 Task 3 函数，错误路径统一 { error: 中文文案 }
-import { listRecipes, createRecipe, filterRecipes } from '@/lib/recipe-store'
+import { listRecipes, createRecipe, filterRecipes, buildFacets } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe, Recipe } from '@/lib/recipe-types'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
@@ -17,16 +17,19 @@ async function parseDraft(req: Request): Promise<DraftRecipe | null> {
   return validateDraft(body)
 }
 
-// GET /api/recipes?q=&tag= → 200 { recipes, invalidFiles }（读操作，方案 A 不记日志）
+// GET /api/recipes?q=&category=&tag= → 200 { recipes, invalidFiles, facets }（读操作，方案 A 不记日志）
+// facets 供前端渲染「分类 / 标签」两行筛选 chips；tags 随 category 收敛（见 buildFacets 注释）
 // listRecipes 非 ENOENT 故障（权限/磁盘等）→ 500 { error: 中文 }（不再静默当空库，误导用户）
 export async function GET(req: Request) {
   const denied = requireAuth(req)
   if (denied) return denied
   const url = new URL(req.url)
   const q = url.searchParams.get('q') ?? undefined
+  const category = url.searchParams.get('category') ?? undefined
   const tag = url.searchParams.get('tag') ?? undefined
   // route 层与 Task 3 filterRecipes 相同的 trim 语义：空白参数视为未提供
   const qTrimmed = q?.trim() || undefined
+  const trimCategory = category?.trim() || undefined
   const trimTag = tag?.trim() || undefined
   let recipes: Recipe[]
   let invalidFiles: string[]
@@ -37,10 +40,12 @@ export async function GET(req: Request) {
   } catch {
     return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
   }
-  const filtered = filterRecipes(recipes, { q: qTrimmed, tag: trimTag })
+  const filtered = filterRecipes(recipes, { q: qTrimmed, category: trimCategory, tag: trimTag })
+  // facets 用同一份 listRecipes 快照计算：保证 chips 与实际数据一致（不会因并发改库而错位）
+  const facets = buildFacets(recipes, trimCategory)
   // Task 3 invalidFiles 语义偏宽（可能含非 .json 条目），route 层过滤只保留 .json 结尾的条目再返回
   const jsonInvalidFiles = invalidFiles.filter(f => f.endsWith('.json'))
-  return Response.json({ recipes: filtered, invalidFiles: jsonInvalidFiles })
+  return Response.json({ recipes: filtered, invalidFiles: jsonInvalidFiles, facets })
 }
 
 // POST /api/recipes（body: DraftRecipe）→ 201 Recipe | 400 { error } | 413 | 500 { error }
