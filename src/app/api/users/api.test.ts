@@ -126,6 +126,27 @@ describe('/api/users', () => {
     ).toBe(401)
   })
 
+  it('管理员账号一律不可禁用/删除（即使还有其他管理员）', async () => {
+    const admin = await enableMultiUser()
+    const admin2 = await makeSession('管理员乙', 'admin')
+    const member = await makeSession('成员', 'member')
+
+    // 有两个管理员时，仍不允许禁用/删除其中任意一个
+    expect((await PATCH(json({ disabled: true }, admin.cookie, 'PATCH'), ctxOf(admin2.user.id))).status).toBe(400)
+    expect((await PATCH(json({ disabled: true }, admin.cookie, 'PATCH'), ctxOf(admin.user.id))).status).toBe(400)
+    // 删除也不行（即便是别人删自己以外的管理员）
+    expect((await DELETE(json({ confirm: '管理员乙' }, admin.cookie, 'DELETE'), ctxOf(admin2.user.id))).status).toBe(400)
+    expect((await DELETE(json({ confirm: '管理员' }, admin2.cookie, 'DELETE'), ctxOf(admin.user.id))).status).toBe(400)
+
+    // 两个 admin 都还在
+    expect((await listUsers()).filter(u => u.role === 'admin')).toHaveLength(2)
+
+    // 普通成员仍可被禁用/删除
+    expect((await PATCH(json({ disabled: true }, admin.cookie, 'PATCH'), ctxOf(member.user.id))).status).toBe(200)
+    expect((await PATCH(json({ disabled: false }, admin.cookie, 'PATCH'), ctxOf(member.user.id))).status).toBe(200)
+    expect((await DELETE(json({ confirm: '成员' }, admin.cookie, 'DELETE'), ctxOf(member.user.id))).status).toBe(204)
+  })
+
   it('不能降级/禁用/删除最后一个管理员', async () => {
     const admin = await enableMultiUser()
     expect((await PATCH(json({ role: 'member' }, admin.cookie, 'PATCH'), ctxOf(admin.user.id))).status).toBe(400)

@@ -86,8 +86,10 @@ export async function PATCH(
     if (typeof b.disabled !== 'boolean') {
       return Response.json({ error: 'disabled 须为布尔值' }, { status: 400 })
     }
-    if (b.disabled && target.role === 'admin' && !(await otherActiveAdminExists(target.id))) {
-      return Response.json({ error: '不能禁用最后一个管理员' }, { status: 400 })
+    // 管理员账号一律不可禁用（不是只看「是否最后一个」）：
+    // 管理员掌握账号与审计权限，禁用后若不慎无人可恢复，等于自锁；且与前端「按钮禁用」口径一致
+    if (b.disabled && target.role === 'admin') {
+      return Response.json({ error: '管理员账号不能禁用' }, { status: 400 })
     }
     patch.disabled = b.disabled
     if (b.disabled) patch.sessionVersion = (patch.sessionVersion ?? target.sessionVersion) + 1
@@ -137,8 +139,9 @@ export async function DELETE(
   if (target.id === auth.user.id) {
     return Response.json({ error: '不能删除当前登录的账号' }, { status: 400 })
   }
-  if (target.role === 'admin' && !(await otherActiveAdminExists(target.id))) {
-    return Response.json({ error: '不能删除最后一个管理员' }, { status: 400 })
+  // 管理员账号一律不可删除（避免把管理能力删没；确需移除请先将另一个账号提为管理员并改其角色）
+  if (target.role === 'admin') {
+    return Response.json({ error: '管理员账号不能删除' }, { status: 400 })
   }
 
   // 二次确认：body { confirm: '<用户名>' }

@@ -558,6 +558,95 @@ export default function SettingsPage() {
         )}
       </section>
 
+      {/* 用户管理（仅管理员）：新建 / 禁用 / 删除。删除会连带清空该用户菜谱库 */}
+      {me?.role === 'admin' && (
+        <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">用户管理</h2>
+
+          <ul className="mb-3 flex flex-col gap-2">
+            {users.map(u => (
+              <li
+                key={u.id}
+                className="flex items-center justify-between gap-2 rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-800"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-neutral-900 dark:text-neutral-100">
+                    {u.name}
+                    {u.role === 'admin' && (
+                      <span className="ml-2 rounded-md bg-neutral-900 px-1.5 py-0.5 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">
+                        管理员
+                      </span>
+                    )}
+                    {u.disabled && (
+                      <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                        已禁用
+                      </span>
+                    )}
+                  </p>
+                </div>
+                {/* 管理员账号：禁用/删除按钮一律置灰（服务端也拒绝，这里是提前告知）。
+                    理由：管理员掌握账号与审计，禁用或删除后若不慎无人可恢复，等于自锁。 */}
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void patchUser(u.id, { disabled: !u.disabled })}
+                    disabled={u.role === 'admin'}
+                    title={u.role === 'admin' ? '管理员账号不可禁用' : undefined}
+                    aria-label={`${u.disabled ? '启用' : '禁用'}用户：${u.name}`}
+                    className="inline-flex min-h-[32px] items-center rounded-md border border-neutral-300 px-2.5 text-sm text-neutral-600 transition-colors active:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:bg-transparent dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800 dark:disabled:active:bg-transparent"
+                  >
+                    {u.disabled ? '启用' : '禁用'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteUserRow(u)}
+                    disabled={u.role === 'admin'}
+                    title={u.role === 'admin' ? '管理员账号不可删除' : undefined}
+                    aria-label={`删除用户：${u.name}`}
+                    className="inline-flex min-h-[32px] items-center rounded-md border border-red-200 px-2.5 text-sm text-red-600 transition-colors active:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:bg-transparent dark:border-red-900 dark:text-red-400 dark:active:bg-red-950 dark:disabled:active:bg-transparent"
+                  >
+                    删除
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          <div className="flex flex-col gap-2">
+            <input
+              type="text"
+              value={newUserName}
+              onChange={e => setNewUserName(e.target.value)}
+              placeholder="新用户名，例如：妈妈"
+              aria-label="新用户名"
+              className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
+            />
+            <input
+              type="password"
+              value={newUserPassword}
+              onChange={e => setNewUserPassword(e.target.value)}
+              placeholder="初始密码（至少 4 位）"
+              aria-label="新用户初始密码"
+              autoComplete="new-password"
+              className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
+            />
+            <button
+              type="button"
+              onClick={() => void handleCreateUser()}
+              disabled={userBusy}
+              className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300"
+            >
+              {userBusy ? '新建中…' : '新建用户'}
+            </button>
+            {userError !== '' && (
+              <p role="alert" className="break-words text-sm text-red-600 dark:text-red-400">
+                {userError}
+              </p>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* 鉴权状态展示：是否已启用多用户（有 users.json）。与删除保护卡构成一组（分组卡片样式）：
           上卡只留顶部圆角、下卡只留底部圆角，两卡贴合无间隔，组间与其他卡片一致（mb-6）。
           整卡可点：连点 5 次显示「访问记录」入口（默认隐藏；刷新即回隐藏）。
@@ -616,89 +705,6 @@ export default function SettingsPage() {
               : '未启用（删除仅浏览器确认，无密码校验）。启用：设置 DELETE_ENABLED=true 与 DELETE_PASSWORD 后重启'}
         </p>
       </section>
-
-      {/* 用户管理（仅管理员）：新建 / 禁用 / 删除。删除会连带清空该用户菜谱库 */}
-      {me?.role === 'admin' && (
-        <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
-          <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">用户管理</h2>
-
-          <ul className="mb-3 flex flex-col gap-2">
-            {users.map(u => (
-              <li
-                key={u.id}
-                className="flex items-center justify-between gap-2 rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-800"
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-sm text-neutral-900 dark:text-neutral-100">
-                    {u.name}
-                    {u.role === 'admin' && (
-                      <span className="ml-2 rounded-md bg-neutral-900 px-1.5 py-0.5 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">
-                        管理员
-                      </span>
-                    )}
-                    {u.disabled && (
-                      <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
-                        已禁用
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void patchUser(u.id, { disabled: !u.disabled })}
-                    aria-label={`${u.disabled ? '启用' : '禁用'}用户：${u.name}`}
-                    className="inline-flex min-h-[32px] items-center rounded-md border border-neutral-300 px-2.5 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800"
-                  >
-                    {u.disabled ? '启用' : '禁用'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void deleteUserRow(u)}
-                    aria-label={`删除用户：${u.name}`}
-                    className="inline-flex min-h-[32px] items-center rounded-md border border-red-200 px-2.5 text-sm text-red-600 transition-colors active:bg-red-50 dark:border-red-900 dark:text-red-400 dark:active:bg-red-950"
-                  >
-                    删除
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-
-          <div className="flex flex-col gap-2">
-            <input
-              type="text"
-              value={newUserName}
-              onChange={e => setNewUserName(e.target.value)}
-              placeholder="新用户名，例如：妈妈"
-              aria-label="新用户名"
-              className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
-            />
-            <input
-              type="password"
-              value={newUserPassword}
-              onChange={e => setNewUserPassword(e.target.value)}
-              placeholder="初始密码（至少 4 位）"
-              aria-label="新用户初始密码"
-              autoComplete="new-password"
-              className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
-            />
-            <button
-              type="button"
-              onClick={() => void handleCreateUser()}
-              disabled={userBusy}
-              className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300"
-            >
-              {userBusy ? '新建中…' : '新建用户'}
-            </button>
-            {userError !== '' && (
-              <p role="alert" className="break-words text-sm text-red-600 dark:text-red-400">
-                {userError}
-              </p>
-            )}
-          </div>
-        </section>
-      )}
 
       {/* 访问记录入口：仅管理员可见（服务端也强制 403），且仍需连点 5 次才显示。
           两层理由：角色控制是权限边界；连点隐藏是「别让旁人一眼看到」。
