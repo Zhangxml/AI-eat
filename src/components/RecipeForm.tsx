@@ -63,7 +63,11 @@ interface AiRecipeResponse {
 }
 
 // 行内次级描边按钮（统一规格）：紧凑高度 py-1.5（桌面与标签行协调，移动端有周边大按钮兜底触摸体验）；
-// 全站同类按钮共用此串：RecipeForm（AI 生成/AI 估算营养）、详情页（编辑/重试）、设置页（开始导入）
+// 全站同类按钮同规格（实测 34px），但注意：**只有本文件这 2 处直接引用此常量**
+// （AI 生成 / AI 估算营养）；另有 7 处是同值副本，改动不会自动同步：
+//   详情页（编辑 / 删除 / 错误态的重试与返回菜谱库 / 删除弹窗的取消与确认删除）——含红色变体
+//   设置页（开始导入）——逐字符相同
+// 未设 min-h、高度由 padding + 1px 边框撑出；改 padding/字号时需逐处同步上述位置
 const compactBtn =
   'shrink-0 rounded-lg border border-neutral-900 px-3 py-1.5 text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-100 disabled:border-neutral-300 disabled:text-neutral-400 dark:border-neutral-100 dark:text-neutral-100 dark:active:bg-neutral-800 dark:disabled:border-neutral-700 dark:disabled:text-neutral-500'
 
