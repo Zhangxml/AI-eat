@@ -1,6 +1,6 @@
-# 全局用户设置（/api/settings）
+# 用户设置（/api/settings，按用户隔离）
 
-> 一句话：用户级**可写**偏好（目前是推荐风格），存服务器 `data/settings.json`，服务端直接消费（前端不传参）。
+> 一句话：每个账号有独立的**可写**偏好（目前是推荐风格），存 `data/users/<uid>/settings.json`，服务端直接消费（前端不传参）。
 
 ## 为什么有这一层
 
@@ -12,10 +12,10 @@
 | 多设备各存各的 | 手机设为湖北家常、平板仍是换口味 |
 | 同一概念两种传法 | chat 用 query、menu/recipes 用 body，契约不一致 |
 
-既然是**全局**偏好，服务端本来就知道答案，不该反过来等前端告诉它。改造后：
+既然是**服务端持久化**的偏好，服务端本来就知道答案，不该反过来等前端告诉它。改造后：
 
 ```
-data/settings.json        ← 持久层（与 data/recipes 同级，同受 data 卷保护）
+data/users/<uid>/settings.json  ← 持久层（按用户隔离，同受 data 卷保护）
         ↑
 src/lib/settings.ts       ← zod schema + 默认值 + 合并（唯一事实来源）
         ↑
@@ -79,7 +79,7 @@ null / [1,2] / 'oops'                        → style=home       非对象全�
 | 接口 | 性质 | 来源 | 内容 |
 | --- | --- | --- | --- |
 | `/api/config` | 部署级、**只读** | 环境变量 | AI 是否配置、baseUrl/model、鉴权/删除保护开关（页面只展示 model，不展示 baseUrl） |
-| `/api/settings` | 用户级、**可写** | `data/settings.json` | 推荐风格等偏好 |
+| `/api/settings` | 用户级、**可写** | `data/users/<uid>/settings.json` | 推荐风格等偏好 |
 
 两者不重叠：env 决定「能不能用」，settings 决定「怎么用」。**优先级约定：用户设置 > 环境变量 > 代码默认**（本次 style 无 env，只实现「文件 > 默认」）。
 
@@ -94,7 +94,7 @@ null / [1,2] / 'oops'                        → style=home       非对象全�
 | 两台设备同时改 | 后写覆盖（单人自用可接受） |
 | 未启用 PASSWORD | 守卫放行，零摩擦 |
 | Docker 部署 | `data/` 已挂卷，无额外配置 |
-| 备份 | 目录直备天然包含 `settings.json`；页面导出/导入仍**只导菜谱**（不扩大备份契约，换机时设置需重设） |
+| 备份 | 目录直备天然包含每人的 `settings.json`；页面导出/导入仍**只导菜谱**（不扩大备份契约，换机时设置需重设） |
 
 ## 加一项新设置要改哪里
 
@@ -128,7 +128,7 @@ null / [1,2] / 'oops'                        → style=home       非对象全�
 | 组件内存态（选定） | ✅ | 唯一满足 |
 | `sessionStorage` | ❌ 同标签页刷新仍在 | 不满足 |
 | URL 参数 `?logs=1` | ❌ 刷新保留 | 不满足 |
-| 写进 `data/settings.json` | ❌ 反而永久保留 + 多设备同步 | 反向 |
+| 写进 `data/users/<uid>/settings.json` | ❌ 反而永久保留 + 同一账号多设备同步 | 反向 |
 
 ### 「连续」的定义
 

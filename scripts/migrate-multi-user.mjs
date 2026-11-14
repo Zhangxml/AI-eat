@@ -9,7 +9,7 @@
 // 行为：
 // 1. 幂等：data/users.json 已存在 → 直接退出（不重复迁移）
 // 2. 先整目录备份 data → data.backup-<时间戳>
-// 3. 建管理员（scrypt 哈希）→ 把 data/recipes/*.json 与 data/settings.json 移入 data/users/<uid>/
+// 3. 建管理员（scrypt 哈希）→ 把 data/recipes/*.json 与 data/settings.json 复制到 data/users/<uid>/（校验后再删源）
 // 4. 校验迁移前后菜谱条数一致，不一致则中止并提示从备份恢复
 // 5. 可回滚：cp -a data.backup-<ts>/. data/
 //
@@ -226,7 +226,9 @@ async function main() {
   log('')
   log('下一步：')
   log('   1. 重启服务（./run.sh restart）')
-  log('   2. 用该用户名 + 密码登录（.env 里的 PASSWORD 已不再用于日常登录，可删除）')
+  log('   2. 登录：密码模式下管理员口令只取环境变量 PASSWORD，脚本里输入的密码不会用于登录。')
+  log('      PASSWORD 同时是「模式开关」：非空=密码模式，留空=免密单用户（任何人都是管理员）。')
+  log('      请务必保留并妥善设置 PASSWORD，不要删除。')
   log(`   3. 回滚：rm -rf data && cp -a ${path.relative(ROOT, backup)} data`)
 }
 

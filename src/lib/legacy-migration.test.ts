@@ -115,6 +115,32 @@ describe('adoptLegacyData 建号时接管旧数据', () => {
     expect(await exists('users.json')).toBe(true)
   })
 
+  it('AI_EAT_DATA_DIR 指向 users/<uid>（少一层 recipes）→ 拒绝，且不动该用户的 settings', async () => {
+    // 真实误配场景：建号把 users.json 写到 dataRoot（= <data>/users），源目录里看不到 users.json，
+    // 旧校验会放行，进而把 settings.json 当菜谱搬走并删除
+    process.env.AI_EAT_DATA_DIR = path.join(root, 'users', 'u-11111111')
+    await write('users/u-11111111/settings.json', '{"version":1,"style":"creative"}')
+    await expect(adoptLegacyData('u-22222222')).rejects.toThrow(/配置错误/)
+    expect(await exists('users/u-11111111/settings.json')).toBe(true)
+  })
+
+  it('源目录含 recipes 子目录（本身就是用户目录）→ 拒绝', async () => {
+    process.env.AI_EAT_DATA_DIR = path.join(root, 'mydishes')
+    await fs.mkdir(path.join(root, 'mydishes', 'recipes'), { recursive: true })
+    await expect(adoptLegacyData('u-11111111')).rejects.toThrow(/配置错误/)
+  })
+
+  it('空源不写完成标记：之后补挂/恢复的旧数据仍会被接管', async () => {
+    const r1 = await adoptLegacyData('u-11111111')
+    expect(r1.migrated).toBe(0)
+    expect(await exists('users/u-11111111/.legacy-adopted')).toBe(false)
+    // 之后旧数据才出现（挂载/恢复）
+    await write('recipes/r-1.json', '{"name":"A"}')
+    const r2 = await adoptLegacyData('u-11111111')
+    expect(r2.migrated).toBe(1)
+    expect(await exists('users/u-11111111/recipes/r-1.json')).toBe(true)
+  })
+
   it('AI_EAT_DATA_DIR 指向某个用户的私有目录 → 拒绝，不搬走别人的库', async () => {
     process.env.AI_EAT_DATA_DIR = path.join(root, 'users', 'u-22222222', 'recipes')
     await write('users/u-22222222/recipes/keep.json', '{"name":"别人的"}')

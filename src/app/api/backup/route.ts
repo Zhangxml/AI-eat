@@ -9,7 +9,7 @@
 //   → 200 { imported: number; skipped: number; skippedIds: string[]; invalidIds: string[] }
 // 错误路径统一 { error: 中文文案 }
 import { z } from 'zod'
-import { listRecipes, getRecipe, putRecipe } from '@/lib/recipe-store'
+import { listRecipes, getRecipe, putRecipe, isSafeId } from '@/lib/recipe-store'
 import { validateRecipe } from '@/lib/recipe-types'
 import type { Recipe } from '@/lib/recipe-types'
 import { readJsonBody, BACKUP_BODY_LIMIT_BYTES } from '@/lib/body-limit'
@@ -115,10 +115,16 @@ async function importOne(item: unknown, index: number, dir: string): Promise<Ite
   if (existing) {
     return { imported: false, skipId: recipe.id, reason: 'duplicate' }
   }
+  // id 非法（穿越等）由 store 白名单守卫拒绝 → 计为 invalid；
+  // 其余异常（EACCES/ENOSPC 等）是存储故障，必须中止并报 500，
+  // 否则用户会以为是备份文件坏了，实际是磁盘/权限问题（恢复备份时尤其危险）。
+  if (!isSafeId(recipe.id)) {
+    return { imported: false, skipId: recipe.id, reason: 'invalid' }
+  }
   try {
     await putRecipe(recipe, dir)
-  } catch {
-    return { imported: false, skipId: recipe.id, reason: 'invalid' }
+  } catch (e) {
+    throw new Error(`写入失败（${recipe.id}）：${e instanceof Error ? e.message : String(e)}`)
   }
   return { imported: true, skipId: null, reason: null }
 }
@@ -159,7 +165,20 @@ export async function POST(req: Request): Promise<Response> {
   let imported = 0
   let skipped = 0
   for (let i = 0; i < parsed.data.recipes.length; i++) {
-    const r = await importOne(parsed.data.recipes[i], i, dir)
+    let r: ItemResult
+    try {
+      r = await importOne(parsed.data.recipes[i], i, dir)
+    } catch (e) {
+      // 存储故障（磁盘满/权限）→ 中止并返回 500；已完成的部分如实返回
+      await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/backup', status: 500 })
+      return Response.json(
+        {
+          error: `导入中断：${e instanceof Error ? e.message : String(e)}（已成功 ${imported} 条）`,
+          imported,
+        },
+        { status: 500 },
+      )
+    }
     if (r.imported) {
       imported++
     } else {

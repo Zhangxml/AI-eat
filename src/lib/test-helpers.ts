@@ -1,5 +1,5 @@
 // 测试专用辅助：把「已启用多用户 + 已登录」的前置状态一次性搭好。
-// 多用户改造后，鉴权开关不再看 env.PASSWORD，而是看 data/users.json 是否存在——
+// 当前鉴权开关是 env.PASSWORD（非空=密码模式、空=免密单用户）——
 // 因此测试必须先建用户、再签发会话。
 import { createUser, type User, type UserRole } from './user-store'
 import { issueSession } from './session'

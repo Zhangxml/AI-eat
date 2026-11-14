@@ -1,6 +1,6 @@
 // 用户设置接口（可写，按用户隔离：data/users/<uid>/settings.json）；与只读的 /api/config（部署级 env）职责分离：
 // - /api/config   = 部署级只读（AI 是否配置、鉴权/删除保护开关）
-// - /api/settings = 用户级可写（推荐风格等偏好），存 data/settings.json
+// - /api/settings = 用户级可写（推荐风格等偏好），存 data/users/<uid>/settings.json
 // GET   → 200 Settings（合并默认值后的完整设置）
 // PATCH → 200 Settings | 400 { error }（未知键/非法值） | 500 { error }（写盘失败）
 import { requireSession } from '@/lib/auth'

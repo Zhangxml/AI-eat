@@ -13,7 +13,7 @@ export function recipesDirFor(userId: string): string {
   return usersDirFor(userId)
 }
 
-/** 该用户的设置文件：旧模式用 data/settings.json，多用户模式用 data/users/<uid>/settings.json */
+/** 该用户的设置文件：LEGACY_OWNER 回落到 data/settings.json（历史兼容），其余用 data/users/<uid>/settings.json */
 export function settingsPathFor(userId: string): string {
   if (userId === LEGACY_OWNER_ID) return settingsFilePath()
   return userSettingsPath(userId)

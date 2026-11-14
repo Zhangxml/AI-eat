@@ -24,6 +24,10 @@ export function safeNextPath(raw: string | null, origin: string): string {
   // 跨源（含 //evil.com、/\evil.com、https://evil.com、javascript:）一律回落首页
   if (url.origin !== origin) return '/'
   const path = url.pathname + url.search
+  // 归一化后必须仍是「单斜杠开头的站内路径」：
+  // `new URL('/..//evil.com', origin)` 会把点段归一化成 `//evil.com`（origin 仍同源），
+  // 只比 origin 会放行，最终 window.location.replace('//evil.com') 跳到站外。
+  if (!path.startsWith('/') || path.startsWith('//')) return '/'
   // 不接受登录页自身（避免登录后原地打转）
   if (path === '/login' || path.startsWith('/login?')) return '/'
   return path

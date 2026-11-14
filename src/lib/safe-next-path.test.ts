@@ -52,3 +52,25 @@ describe('safeNextPath 登录后回跳目标', () => {
     expect(safeNextPath('http://localhost:8890/settings?a=1', ORIGIN)).toBe('/settings?a=1')
   })
 })
+
+describe('safeNextPath：点段归一化（开放重定向变体）', () => {
+  it('`/..//evil.com` 归一化成协议相对路径 → 首页', () => {
+    // new URL 会把 /..//evil.com 归一化为 //evil.com（origin 仍同源），
+    // 只比较 origin 会放行，最终 window.location.replace('//evil.com') 跳到站外
+    for (const raw of [
+      '/..//evil.com',
+      '/a/..//evil.com',
+      '/..///evil.com',
+      '/%2e%2e//evil.com',
+      '/%2e%2e//evil.com?x=1',
+      '/a/../..//evil.com',
+      '/./..//evil.com',
+    ]) {
+      expect(safeNextPath(raw, ORIGIN), raw).toBe('/')
+    }
+  })
+
+  it('正常点段路径仍保留（/a/../settings → /settings）', () => {
+    expect(safeNextPath('/a/../settings', ORIGIN)).toBe('/settings')
+  })
+})

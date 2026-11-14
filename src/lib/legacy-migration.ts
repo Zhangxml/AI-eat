@@ -50,7 +50,14 @@ async function listJsonFiles(dir: string): Promise<string[]> {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw e
   }
-  return entries.filter(f => f.endsWith('.json') && !f.startsWith('.'))
+  // 只收普通文件：`foo.json` 若是个目录，copyFile 会 EISDIR 并让迁移永久失败
+  const names = entries.filter(f => f.endsWith('.json') && !f.startsWith('.'))
+  const files: string[] = []
+  for (const name of names) {
+    const st = await fs.lstat(path.join(dir, name)).catch(() => null)
+    if (st?.isFile()) files.push(name)
+  }
+  return files
 }
 
 /**
@@ -83,11 +90,21 @@ async function assertSourceIsRecipesDir(sourceDir: string): Promise<void> {
     )
   }
 
-  // <data>/users/<uid>/recipes：父目录是用户 id，说明指向了某个用户的私有库
+  // 位于某个用户的私有目录下：<data>/users/<uid> 或 <data>/users/<uid>/recipes。
+  // 注意不能只认「父目录形如 u-<8hex>」——误配少一层 /recipes 时父目录是 `users`，
+  // 而建号把 users.json 写到了 dataRoot（= <data>/users）里，源目录本身看不到 users.json，
+  // 旧校验会放行，进而把该用户的 settings.json 当菜谱搬走并删除。
   const parent = path.basename(path.dirname(src))
-  if (/^u-[0-9a-f]{8}$/.test(parent)) {
+  const grandparent = path.basename(path.dirname(path.dirname(src)))
+  if (parent === 'users' || grandparent === 'users' || /^u-[0-9a-f]{8}$/.test(parent)) {
     throw new Error(
-      `AI_EAT_DATA_DIR 配置错误：${sourceDir} 位于用户私有目录下，会搬走其他用户的菜谱`,
+      `AI_EAT_DATA_DIR 配置错误：${sourceDir} 位于用户私有目录下，会搬走其他用户的菜谱/设置`,
+    )
+  }
+  // 含 recipes 子目录说明这本身就是一个「用户目录」（users/<uid>），不是菜谱库
+  if (entries.includes('recipes')) {
+    throw new Error(
+      `AI_EAT_DATA_DIR 配置错误：${sourceDir} 下含 recipes 子目录，应指向菜谱库目录本身（如 <data>/recipes）`,
     )
   }
 }
@@ -163,8 +180,11 @@ export async function adoptLegacyData(userId: string): Promise<AdoptResult> {
     await fs.rm(path.join(sourceDir, f), { force: true })
   }
 
-  // 最后写完成标记：中途失败不会误标完成，下次仍会按文件补齐
-  await fs.writeFile(markerPath, new Date().toISOString() + '\n', 'utf8')
+  // 完成标记只在「确实搬过文件」时写：
+  // 全新部署时源目录为空，若此时也标记完成，之后才挂载/恢复的旧菜谱将永远不会被接管。
+  if (sourceFiles.length > 0) {
+    await fs.writeFile(markerPath, new Date().toISOString() + '\n', 'utf8')
+  }
 
   return { migrated: toCopy.length, wroteDefaultSettings }
 }

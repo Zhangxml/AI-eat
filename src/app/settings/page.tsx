@@ -68,6 +68,7 @@ export default function SettingsPage() {
   const [me, setMe] = useState<NonNullable<MeResponse['currentUser']> | null>(null)
   // 用户管理（仅管理员）：列表 / 新建表单 / 行内错误
   const [users, setUsers] = useState<UserRow[]>([])
+  const [usersError, setUsersError] = useState('')
   const [newUserName, setNewUserName] = useState('')
   const [newUserPassword, setNewUserPassword] = useState('')
   const [userBusy, setUserBusy] = useState(false)
@@ -184,11 +185,25 @@ export default function SettingsPage() {
   const loadUsers = useCallback(async () => {
     try {
       const res = await apiFetch('/api/users')
-      if (!res.ok) return
+      if (!res.ok) {
+        // 500/503 不能静默：否则用户会以为「系统里只有自己」
+        let msg = `加载用户列表失败（HTTP ${res.status}）`
+        try {
+          const body = (await res.json()) as { error?: string }
+          if (body.error) msg = body.error
+        } catch {
+          // 非 JSON 响应：保留通用文案
+        }
+        if (mountedRef.current) setUsersError(msg)
+        return
+      }
       const data = (await res.json()) as { users: UserRow[] }
-      if (mountedRef.current) setUsers(data.users)
+      if (mountedRef.current) {
+        setUsers(data.users)
+        setUsersError('')
+      }
     } catch {
-      // 忽略
+      if (mountedRef.current) setUsersError('加载用户列表失败：网络异常')
     }
   }, [])
 
@@ -395,15 +410,20 @@ export default function SettingsPage() {
             </p>
             <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
               {me.role === 'admin'
-                ? config?.authEnabled === true
-                  ? '管理员（可管理账号与查看访问记录）'
-                  : '管理员（免密单用户）'
+                ? config === null
+                  ? configFailed
+                    ? '管理员（账号状态加载失败）'
+                    : '管理员（状态加载中…）'
+                  : config.authEnabled
+                    ? '管理员（可管理账号与查看访问记录）'
+                    : '管理员（免密单用户）'
                 : '普通成员'}
             </p>
           </div>
-          {/* 免密单用户模式没有登录动作，退出登录没有意义（点了只会清 Cookie 再被弹回首页）：
-              与用户管理一样，等 config 明确为密码模式后才渲染，避免加载中闪一下 */}
-          {config?.authEnabled === true && (
+          {/* 免密单用户模式没有登录动作，退出登录没有意义（点了只会清 Cookie 再被弹回首页）。
+              只有「明确是免密」时才隐藏；config 加载中/失败时保留入口——
+              否则密码模式下 config 请求失败一次就再也退不出登录。 */}
+          {config?.authEnabled !== false && (
             <button
               type="button"
               onClick={() => void handleLogout()}
@@ -572,6 +592,19 @@ export default function SettingsPage() {
       {me?.role === 'admin' && config?.authEnabled === true && (
         <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
           <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">用户管理</h2>
+
+          {usersError !== '' && (
+            <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-600 dark:border-red-900 dark:text-red-400">
+              <span className="min-w-0 break-words">{usersError}</span>
+              <button
+                type="button"
+                onClick={() => void loadUsers()}
+                className="shrink-0 rounded-md border border-red-200 px-2 py-1 text-xs dark:border-red-900"
+              >
+                重试
+              </button>
+            </div>
+          )}
 
           <ul className="mb-3 flex flex-col gap-2">
             {users.map(u => (

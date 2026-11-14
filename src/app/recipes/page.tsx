@@ -140,7 +140,9 @@ export default function RecipesPage() {
       {/* 筛选区：分类 / 标签各一行、单行横滑；均以「全部」为首项且默认选中。
           标签行的 options 来自 facets.tags——已随分类收敛，故不会点出必然为空的组合。
           没有对应数据时不渲染该行（空库时两行都消失）：只有「全部」一个选项的筛选没有意义。 */}
-      {!loading && (facets.categories.length > 0 || facets.tags.length > 0) && (
+      {/* 不用 !loading 包住：筛选/搜索的 refetch 期间 loading=true 会让两行筛选消失再出现（整块跳动）。
+          facets 初始为空，所以首次加载不会渲染；刷新时保留上一份 facets，布局稳定。 */}
+      {(facets.categories.length > 0 || facets.tags.length > 0) && (
         <div className="mb-3 flex flex-col gap-2">
           {facets.categories.length > 0 && (
             <FilterRow

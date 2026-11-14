@@ -1,6 +1,6 @@
 // 全局用户设置：schema + 默认值 + 合并（唯一事实来源）
 // 设计要点（评估已确认）：
-// - data/settings.json 持久化，带 version 便于未来迁移
+// - 持久化在 data/users/<uid>/settings.json（旧模式回落到 data/settings.json），带 version 便于迁移
 // - 未知键一律拒绝（PATCH 传错键要报 400，不静默吞）
 // - 缺字段用默认值补齐；损坏文件读取层回落默认
 import { z } from 'zod'

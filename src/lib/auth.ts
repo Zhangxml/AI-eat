@@ -86,7 +86,7 @@ export async function authEnabled(): Promise<boolean> {
   return !isPasswordlessMode()
 }
 
-/** 最早创建且未禁用的管理员（免密模式的唯一身份、登录页的预填用户名） */
+/** 最早创建且未禁用的管理员（免密模式的唯一身份） */
 export async function firstAdmin(): Promise<User | null> {
   const { state, users } = await readUsersFile()
   if (state !== 'ok') return null
@@ -179,8 +179,21 @@ export async function requireSession(
 ): Promise<SessionResult> {
   // ---- 免密单用户模式：系统只有一个身份（最早的管理员）----
   if (isPasswordlessMode()) {
-    // 首次运行会自动建「管理员」并接管旧数据；已初始化则确保接管过（幂等）
-    await ensurePasswordlessAdmin()
+    // 首次运行会自动建「管理员」并接管旧数据；已初始化则确保接管过（幂等）。
+    // 写盘失败（卷只读/磁盘满）必须转成 503 JSON，否则会冒泡成 Next 的 500 HTML，
+    // 前端 apiFetch 与审计都无法按契约处理。
+    try {
+      await ensurePasswordlessAdmin()
+    } catch {
+      return {
+        ok: false,
+        reason: 'user-store-broken',
+        res: Response.json(
+          { error: '数据目录不可写：无法创建或读取管理员账号，请检查 data 目录权限' },
+          { status: 503 },
+        ),
+      }
+    }
 
     const { state, users } = await readUsersFile()
     if (state !== 'ok' || users.length === 0) {
@@ -245,7 +258,7 @@ export async function requireSession(
   return { ok: true, legacy: false, user: toSessionUser(user) }
 }
 
-/** 仅管理员可访问（访问记录、用户管理）。旧模式放行。 */
+/** 仅管理员可访问（访问记录、用户管理）。 */
 export async function requireAdmin(
   req: Request,
   now: number = Date.now(),

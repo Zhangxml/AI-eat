@@ -5,7 +5,7 @@
 
 ## 做什么
 
-提供个人菜谱库的**持久化存储**：一菜一 JSON 文件，落服务端 `data/recipes/<id>.json`。对外暴露两组能力：
+提供每个账号独立的菜谱库**持久化存储**：一菜一 JSON 文件，落服务端 `data/users/<uid>/recipes/<id>.json`。对外暴露两组能力：
 
 - **数据模型与校验**（recipe-types）：`Recipe`（完整菜谱）、`DraftRecipe`（入库草稿，无 id/时间戳）、`Nutrition`（营养四项+估算标记），zod schema 严格校验，非法输入返回 `null` 而非抛错
 - **文件存取**（recipe-store）：`listRecipes / getRecipe / createRecipe / updateRecipe / deleteRecipe / putRecipe / filterRecipes`，外加路径安全守卫 `isSafeId`
@@ -18,7 +18,7 @@
 AI 生成/人工录入
       │ validateDraft（zod .strict()）
       ▼
-DraftRecipe ──createRecipe──► 补 id(r-<毫秒>-<hex6>)+时间戳 ──原子写──► data/recipes/<id>.json
+DraftRecipe ──createRecipe──► 补 id(r-<毫秒>-<hex6>)+时间戳 ──原子写──► data/users/<uid>/recipes/<id>.json
       │                                                                    │
       │ updateRecipe（保 id/createdAt，刷 updatedAt）                        │ listRecipes 读目录
       ▼                                                                    ▼
@@ -51,7 +51,7 @@ DraftRecipe ──createRecipe──► 补 id(r-<毫秒>-<hex6>)+时间戳 ─�
 | 单一大 JSON 文件 | 每次写全量重写，手改困难，坏一处坏全库 |
 | **一菜一 JSON 文件（选定）** | 可读可手改、按菜粒度原子写、备份=复制目录 |
 
-存储在**服务端**而非浏览器的核心动机：手机/平板/电脑访问同一服务共享一份库，天然无同步问题；`data/` 目录整目录复制即备份。
+存储在**服务端**而非浏览器的核心动机：同一账号的手机/平板/电脑共享一份库，天然无同步问题；不同账号按 `users/<uid>/` 目录隔离。`data/` 目录整目录复制即备份。
 
 ## 优缺点
 
@@ -72,7 +72,7 @@ DraftRecipe ──createRecipe──► 补 id(r-<毫秒>-<hex6>)+时间戳 ─�
 ## 架构位置
 
 ```
-前端页面 ──► /api/recipes*（薄封装）──► recipe-store ──► data/recipes/*.json
+前端页面 ──► /api/recipes*（薄封装）──► recipe-store ──► data/users/<uid>/recipes/*.json
 AI 接口（库摘要）──► listRecipes ─┘
 备份接口 ──► putRecipe/getRecipe ─┘
 ```

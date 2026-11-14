@@ -1,4 +1,4 @@
-// 全局设置的持久化：data/settings.json（与菜谱库 data/recipes 同级，同受 data 卷保护）
+// 用户设置的持久化：data/users/<uid>/settings.json（按用户隔离，同受 data 卷保护）
 // - 读：文件缺失/损坏/字段非法 → 回落默认设置，绝不抛错（设置坏了不能把整个应用带崩）
 // - 写：临时文件 + rename 原子替换，自动创建父目录
 import { promises as fs } from 'node:fs'

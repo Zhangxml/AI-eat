@@ -19,7 +19,9 @@ import {
   attemptKey,
   backoffRemaining,
   clearFailures,
+  globalBackoffRemaining,
   recordFailure,
+  recordGlobalFailure,
 } from '@/lib/login-throttle'
 import { createUser, findUserByName, readUsersFile } from '@/lib/user-store'
 import { adoptLegacyData } from '@/lib/legacy-migration'
@@ -88,13 +90,21 @@ export async function POST(req: Request): Promise<Response> {
     await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 400 })
     return Response.json({ error: '请求体格式非法：需要 username 与 password' }, { status: 400 })
   }
+  // 用户名上限：真实账号 ≤32。不限长会让 1MB body 的用户名进入限流 Map（每个约 2ms 内存，
+  // 1000 个键可达数 GB，未认证即可 OOM）
+  if (username.length > 64) {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 400 })
+    return Response.json({ error: '用户名过长' }, { status: 400 })
+  }
 
   const now = Date.now()
 
   // ---- 首次初始化：还没有任何用户 ----
   if (await bootstrapRequired()) {
     const key = attemptKey(throttleIp, username)
-    const wait = backoffRemaining(key, now)
+    // 全局桶先判：与用户名无关，挡住「换用户名绕过」
+    const globalWait = globalBackoffRemaining(throttleIp, now)
+    const wait = Math.max(backoffRemaining(key, now), globalWait)
     if (wait > 0) {
       return Response.json({ error: `尝试过于频繁，请 ${Math.ceil(wait / 1000)} 秒后再试` }, { status: 429 })
     }
@@ -102,6 +112,7 @@ export async function POST(req: Request): Promise<Response> {
     const bootstrapPassword = process.env.PASSWORD ?? ''
     if (bootstrapPassword !== '' && password !== bootstrapPassword) {
       recordFailure(key, now)
+      recordGlobalFailure(throttleIp, now)
       if (shouldLog(throttleIp, now)) {
         await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 401 })
       }
@@ -155,7 +166,8 @@ export async function POST(req: Request): Promise<Response> {
 
   // ---- 常规登录 ----
   const key = attemptKey(throttleIp, username)
-  const wait = backoffRemaining(key, now)
+  const globalWait = globalBackoffRemaining(throttleIp, now)
+  const wait = Math.max(backoffRemaining(key, now), globalWait)
   if (wait > 0) {
     return Response.json({ error: `尝试过于频繁，请 ${Math.ceil(wait / 1000)} 秒后再试` }, { status: 429 })
   }
@@ -186,6 +198,7 @@ export async function POST(req: Request): Promise<Response> {
 
   if (!ok || user === null || user.disabled) {
     recordFailure(key, now)
+    recordGlobalFailure(throttleIp, now)
     if (shouldLog(throttleIp, now)) {
       await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 401 })
     }

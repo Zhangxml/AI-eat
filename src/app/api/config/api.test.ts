@@ -1,5 +1,5 @@
 // GET /api/config 单测：env 注入 + 快照恢复（node 环境，不启 HTTP 服务器）
-// 多用户改造后：鉴权开关看 data/users.json 是否存在（不再看 env.PASSWORD）。
+// 当前鉴权开关是 env.PASSWORD：非空=密码模式（authEnabled=true），空=免密单用户。
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'

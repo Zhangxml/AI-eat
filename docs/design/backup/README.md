@@ -15,7 +15,10 @@
 ### 导出
 
 ```
-GET /api/backup → 200 { exportedAt, recipes: Recipe[] }
+GET /api/backup →
+  member → 200 { exportedAt, recipes: Recipe[] }                    # 自己的库
+  admin  → 200 { exportedAt, recipes: Recipe[], users: [{ name, recipes }] }
+                                                                      # recipes 是管理员自己的库，users 是全部用户（不含凭据）
     + Content-Disposition: attachment; filename=ai-eat-backup-<YYYYMMDD>.json
 ```
 

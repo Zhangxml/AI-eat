@@ -115,7 +115,7 @@ export async function readUsersFile(): Promise<{ state: UsersFileState; users: U
 /**
  * 是否「已经进入多用户模式」——用 `data/users/` 目录作为迁移标记。
  * 迁移脚本与首次建号都会创建该目录，因此：
- * - 无 users.json 且无 users/ 目录 → 从未迁移（允许旧模式放行 + bootstrap）
+ * - 无 users.json 且无 users/ 目录 → 从未迁移（密码模式引导建号；免密模式自动建管理员）
  * - 有 users/ 目录但 users.json 缺失/损坏 → **已迁移但表坏了**（必须 fail-closed）
  */
 export async function multiUserInitialized(): Promise<boolean> {
@@ -286,8 +286,8 @@ export async function updateUser(
 
 /**
  * 删除用户（仅从表里移除；其数据目录由调用方决定是否清理）。
- * 安全约束：**不允许删掉最后一个用户**——表变空会让服务回落到「旧模式放行」，
- * 相当于把鉴权整个关掉。需要清空请直接维护 data/users.json。
+ * 安全约束：**不允许删掉最后一个用户**——表变空会让所有受保护请求 503（fail-closed），
+ * 且再无可用管理员。需要清空请直接维护 data/users.json。
  */
 export async function deleteUser(id: string): Promise<void> {
   return mutateUsers(users => {

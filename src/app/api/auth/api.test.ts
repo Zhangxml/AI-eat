@@ -187,6 +187,22 @@ describe('/api/auth', () => {
     expect((await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))).status).toBe(503)
   })
 
+  it('用户名过长 → 400（防超长用户名撑爆限流 Map 内存）', async () => {
+    const res = await POST(loginReq({ username: 'a'.repeat(1000), password: 'x' }))
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('用户名过长')
+  })
+
+  it('换不同用户名也不能绕过全局限流（防 scrypt CPU 放大）', async () => {
+    // 每个用户名只失败 1 次 → 单用户名桶永远不触发；靠全局桶兜住
+    for (let i = 0; i < 30; i++) {
+      const res = await POST(loginReq({ username: `no-such-${i}`, password: 'bad' }))
+      expect(res.status).toBe(401)
+    }
+    const blocked = await POST(loginReq({ username: 'no-such-final', password: 'bad' }))
+    expect(blocked.status).toBe(429)
+  })
+
   it('伪造 X-Forwarded-For 不能绕过登录限流（直连时忽略 XFF）', async () => {
     await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
     // 同一个用户名连错 5 次，每次都换一个伪造 XFF —— 旧实现会把它当成不同来源
