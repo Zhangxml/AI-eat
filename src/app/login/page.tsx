@@ -111,7 +111,7 @@ export default function LoginPage() {
           type="text"
           value={username}
           onChange={e => setUsername(e.target.value)}
-          placeholder={needsSetup ? '管理员用户名，例如：爸爸' : '用户名'}
+          placeholder={needsSetup ? '管理员用户名，例如：admin' : '用户名'}
           aria-label="用户名"
           autoComplete="username"
           className={inputClass}
