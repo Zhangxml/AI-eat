@@ -83,21 +83,6 @@ start_server() {
     npm run build
   fi
 
-  # 把会话密钥注入环境变量：middleware（Edge runtime）读不到 .session-secret 文件，
-  # 只能通过 env 拿到密钥来验签。没有它，middleware 只能「看到 Cookie 就放行」——
-  # 那样任何无效/过期/来自其它实例的 Cookie 都会先渲染出完整页面骨架、再被 401 踢走（闪一下）。
-  # 优先级：已在环境里显式设置的 SESSION_SECRET > <数据根目录>/.session-secret 文件 > 交给服务自己生成。
-  # 数据根目录与 app 侧一致：AI_EAT_DATA_DIR 指向 <data>/recipes，未设时用 ./data。
-  DATA_ROOT="$(dirname "${AI_EAT_DATA_DIR:-data/recipes}")"
-  if [ -z "${SESSION_SECRET:-}" ] && [ -f "${DATA_ROOT}/.session-secret" ]; then
-    # 去掉文件末尾换行（node 侧 readFile 后 trim，这里保持一致，避免两侧密钥不同导致全员重登）
-    # 2>/dev/null || true：文件存在但不可读时不因 set -e 中断启动（退化交给服务自己处理）
-    SESSION_SECRET="$(cat "${DATA_ROOT}/.session-secret" 2>/dev/null | tr -d '\r\n' || true)"
-  fi
-  if [ -n "${SESSION_SECRET:-}" ]; then
-    export SESSION_SECRET
-  fi
-
   echo "启动中：http://localhost:${PORT}（日志：${LOG_FILE}）"
   # setsid：脱离当前会话独立成组，组长 PID 写入 PID 文件，stop 按进程组收割
   PORT="${PORT}" nohup setsid npm start > "${LOG_FILE}" 2>&1 &

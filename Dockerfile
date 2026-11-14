@@ -11,8 +11,6 @@ RUN npm ci
 # ---- 阶段 2：构建 standalone 产物 ----
 FROM node:20-alpine AS builder
 WORKDIR /app
-# 入口脚本随镜像分发（COPY --from=builder 需要它在 builder 层存在）
-COPY docker-entrypoint.sh ./docker-entrypoint.sh
 # 触发 next.config.ts 的 output: 'standalone'（裸机构建不受影响）
 ENV DOCKER_BUILD=1
 COPY --from=deps /app/node_modules ./node_modules
@@ -39,12 +37,8 @@ COPY --from=builder --chown=node:node /app/public ./public
 # 数据目录不在这里 mkdir/chown——compose 的 bind mount ./data:/app/data 会整体覆盖镜像内该路径，
 # 镜像里的属主设置对挂载点无效，实际写权限取决于【宿主机 ./data 的属主】。
 # 因此 README 要求先由用户 `mkdir -p ./data`（属主 uid 1000），见 README「数据目录归属」。
-# 入口脚本：把 data/.session-secret 注入 env.SESSION_SECRET（middleware 验签需要）
-COPY --from=builder --chown=node:node /app/docker-entrypoint.sh ./docker-entrypoint.sh
-
 USER node
 
 EXPOSE 3000
 
-ENTRYPOINT ["/bin/sh", "./docker-entrypoint.sh"]
 CMD ["node", "server.js"]

@@ -68,26 +68,43 @@ data/
 
 ## 页面守卫（middleware）
 
-未登录访问任何页面时，由 `src/middleware.ts`（Edge）在**服务端**直接 303 到 `/login?next=<原路径>`，
+未登录、或会话已失效时，由 `src/middleware.ts` 在**服务端**直接 303 到 `/login?next=<原路径>`，
 页面根本不会下发。
 
 为什么不用客户端跳转：页面是客户端组件，`Link` 软导航会先把整页骨架渲染出来，
-数据请求拿到 401 后才整页跳走——实测会闪 4 帧完整骨架（约 850ms）。
+数据请求拿到 401 后才整页跳走——实测会闪完整骨架（注入 300ms 延迟时约 600ms）。
 服务端拦截后为 0 帧。
+
+**跑在 Node runtime**（`export const config = { runtime: 'nodejs' }`，Next 15.5 起稳定）：
+判定「会话是否还有效」必须读 `data/users.json`，Edge runtime 没有文件系统。
+早期版本跑在 Edge、只能验签，于是「被禁用/改密/删除」的人旧 token 签名依然合法 →
+middleware 放行 → 骨架渲染 → API 401 才跳（实测复现）。
+也考虑过 Edge + 回调自身 `/api/auth/session`，但 `req.nextUrl.origin` 的协议取自
+`X-Forwarded-Proto`，TLS 反代下会变成 `https://…` 导致自调用失败、静默退化为放行——故弃用。
+
+判定直接复用 `requireSession`，与各 API 路由**同一份代码**，不可能分叉：
+
+| 情况 | 行为 |
+| --- | --- |
+| 未登录（无 Cookie / 签名不对 / 已过期） | 303 到 `/login?next=<原路径>` |
+| 用户被禁用 / 已删除 / 改密后 `sessionVersion` 不符 | 同样 303（这是「禁用后还会闪」的根因，Node runtime 才判得了） |
+| 用户表损坏或为空（503） | **放行**，让页面把「请从备份恢复」的错误显示出来；跳登录页只会更困惑 |
+| 旧模式（从未初始化） | 放行，交由 `/login` 引导创建首个管理员 |
 
 口径与边界：
 
 | 项 | 说明 |
 | --- | --- |
-| 判定依据 | 无 Cookie → 直接重定向；**有 Cookie 则验签 + 验过期**（`src/lib/edge-session.ts`，Web Crypto） |
-| 密钥来源 | `env.SESSION_SECRET`。`run.sh` 启动时从 `data/.session-secret` 自动注入；Docker 由 `docker-entrypoint.sh` 注入；直接 `next start` 需自行设置（未设置时退化为只查存在性，不锁死用户） |
-| 为何不能只查存在性 | Cookie 按 domain 匹配、**不区分端口**：另一个实例（如临时测试端口）留下的 Cookie 会被带来，导致骨架先渲染、再被 401 踢走（闪一下） |
-| 威胁模型 | 伪造/过期 Cookie 会被验签拦下（不再渲染骨架）；验签只覆盖「签名/过期」，「用户被禁用/改密后旧会话」仍由 API 守卫兜底 |
+| 客户端路由缓存 | `next.config.ts` 里 `experimental.staleTimes = { static: 0, dynamic: 0 }`。静态页的预取 payload 默认缓存 5 分钟，禁用后用**禁用前**的缓存仍会画出骨架（注入 300ms 时实测 37 帧）；设为 0 后每次导航都向服务端确认，实测 0 帧。代价是每次 tab 切换多一个 RTT（局域网约 10ms） |
 | `/login` | 永远放行，否则重定向循环 |
 | matcher | 排除 `api/`、`_next/`、`__nextjs`、静态后缀（含 json/webmanifest/字体），避免误拦 RSC 与开发工具 |
+| `runtime` 写法 | 必须写成字面量 `{ runtime: 'nodejs' }`；加 `as const` 会让 Next 的静态解析取不到 runtime，退回 Edge 并在构建时报 `node:fs` 无法打包 |
 | 回跳 | 登录页用 `safeNextPath` 校验：反斜杠/协议相对/绝对 URL/`javascript:` 一律回落首页（防开放重定向） |
 | 登录成功 | 用 `window.location.replace` 而非 `router.replace`——后者会复用「未登录→307」的客户端路由缓存，又被弹回登录页（已实测） |
-| 会话过期 | 验签含过期校验，过期/伪造 Cookie 同样 303，不残余骨架。唯一残余骨架的场景是「用户被禁用/改密后仍有旧 token」：middleware 读不到 `users.json`（Edge 无文件系统），需 API 层 401 后才跳，属低频路径 |
+| 单测 | `src/middleware.test.ts` 覆盖：无 Cookie / 有效 / 伪造 / 过期 / 禁用 / 改密 / 用户表损坏 / 旧模式 / `next` 参数 |
+| 硬约束 1：不要加 `loading.tsx` | 当前 0 帧成立的前提是页面在导航期间**保持旧内容**、等 303 到达后整页跳走。若给 `/recipes`、`/settings` 等加 `loading.tsx`，客户端会在 303 之前先渲染 loading 骨架 → 被吊销用户重新看到闪一下 |
+| 硬约束 2：反代不要缓存页面壳 | 预渲染页带 `Cache-Control: s-maxage=31536000` 且无 `Vary: Cookie`。浏览器不吃它，但若在 Nginx/CDN 开了共享缓存，命中缓存的请求根本不进 Next、middleware 不执行 → 又会看到壳。要么直连，要么反代对页面路由设 `proxy_no_cache` / 加 `Vary: Cookie` |
+| 部署冒烟 | `./run.sh status` 只看端口。部署后请实际验证「无 Cookie 访问 `/recipes` 必须 303」——`functions-config-manifest.json` 缺失时 Next 15.5.6 会启动失败且报错难懂（`Cannot read properties of undefined (reading '/_middleware')`） |
 
 ## 登录与初始化
 

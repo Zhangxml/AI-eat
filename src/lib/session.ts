@@ -11,10 +11,8 @@ import { dataRoot } from './user-store'
 
 // 会话有效期 30 天，与 Cookie Max-Age 保持一致
 const SESSION_TTL_MS = 30 * 86400_000
-// 会话 Cookie 名：唯一定义在 edge-session.ts（无 node 依赖，middleware 与这里共用一份）。
-// 不能在两侧各写一份——改名只改一处会造成「登录成功但仍被 middleware 拦回登录页」的死循环。
-export { SESSION_COOKIE } from './edge-session'
-import { SESSION_COOKIE } from './edge-session'
+// 会话 Cookie 名（登录下发与守卫校验两侧共用）
+export const SESSION_COOKIE = 'ai-eat-session'
 
 export interface SessionPayload {
   uid: string

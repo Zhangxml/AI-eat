@@ -43,6 +43,10 @@ export default function BottomNav() {
             <Link
               key={item.href}
               href={item.href}
+              // 不做预取：next.config.ts 里 staleTimes 已设为 0（预取结果永不复用），
+              // 预取只会白花请求。更重要的是避免「禁用前预取的页面」被画出来——
+              // 见 docs/design/multi-user/README.md「页面守卫」。
+              prefetch={false}
               // 从隐藏页离开用 replace：不把它留在历史栈里（否则后退可绕过手势直达）
               replace={onHiddenPage}
               // 隐藏页上「设置」只是所在层级、并非当前页：用 "true"（集合内的当前项）而非

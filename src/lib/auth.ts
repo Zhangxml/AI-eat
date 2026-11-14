@@ -29,9 +29,15 @@ export interface SessionUser {
   role: UserRole
 }
 
+// 失败原因显式化：调用方（尤其 middleware）不应靠 status code 猜语义。
+// - unauthenticated：未登录 / 已禁用 / 已删除 / sessionVersion 不符 → 页面层可安全跳登录
+// - user-store-broken：用户表损坏或为空（503）→ 页面层应放行，让页面把错误显示出来
+// - forbidden：已登录但角色不足（403）
+export type SessionFailureReason = 'unauthenticated' | 'user-store-broken' | 'forbidden'
+
 export type SessionResult =
   | { ok: true; user: SessionUser; legacy: boolean }
-  | { ok: false; res: Response }
+  | { ok: false; res: Response; reason: SessionFailureReason }
 
 /** 是否已进入多用户模式（有合法用户） */
 export async function multiUserMode(): Promise<boolean> {
@@ -91,6 +97,7 @@ export async function requireSession(
   if (state !== 'ok' || users.length === 0) {
     return {
       ok: false,
+      reason: 'user-store-broken',
       res: Response.json(
         { error: '用户表损坏或为空：请从备份恢复 data/users.json 后重启' },
         { status: 503 },
@@ -100,15 +107,15 @@ export async function requireSession(
 
   const header = req.headers.get('cookie')
   const token = header === null ? null : cookieValue(header, SESSION_COOKIE)
-  if (token === null) return { ok: false, res: UNAUTHORIZED() }
+  if (token === null) return { ok: false, reason: 'unauthenticated', res: UNAUTHORIZED() }
 
   const claims = await verifySession(token, now)
-  if (claims === null) return { ok: false, res: UNAUTHORIZED() }
+  if (claims === null) return { ok: false, reason: 'unauthenticated', res: UNAUTHORIZED() }
 
   const user = await getUser(claims.uid)
-  if (user === null || user.disabled) return { ok: false, res: UNAUTHORIZED() }
+  if (user === null || user.disabled) return { ok: false, reason: 'unauthenticated', res: UNAUTHORIZED() }
   // 改密/管理员强制下线：版本不匹配即视为失效
-  if (user.sessionVersion !== claims.ver) return { ok: false, res: UNAUTHORIZED() }
+  if (user.sessionVersion !== claims.ver) return { ok: false, reason: 'unauthenticated', res: UNAUTHORIZED() }
 
   return { ok: true, legacy: false, user: toSessionUser(user) }
 }
@@ -120,7 +127,7 @@ export async function requireAdmin(
 ): Promise<SessionResult> {
   const result = await requireSession(req, now)
   if (!result.ok) return result
-  if (result.user.role !== 'admin') return { ok: false, res: FORBIDDEN() }
+  if (result.user.role !== 'admin') return { ok: false, reason: 'forbidden', res: FORBIDDEN() }
   return result
 }
 

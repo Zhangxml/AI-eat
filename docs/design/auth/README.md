@@ -73,7 +73,7 @@ DELETE /api/recipes/:id（启用时要求 body { deletePassword }）
 | --- | --- |
 | 环境变量开关而非用户系统 | 单人自用，注册/用户管理是过度设计；开关+口令是摩擦与安全的平衡点 |
 | HMAC token 而非服务端 session 表 | 无状态会话（重启不失效、不占存储）；密钥即 PASSWORD，自用场景无需 KDF（账本已裁定） |
-| 守卫在 handler 首行而非 middleware | Next middleware 需要额外配置文件且对 standalone 构建有边界；handler 级守卫显式、可测（直接 import 调用）。代价：新增路由须手动加守卫（当前共 10 个 route，除 /api/auth 本身豁免外，其余 9 个均有 requireAuth 守卫——含访问记录与营养接口） |
+| API 侧守卫在 handler 首行，页面侧由 middleware 兜底 | handler 级守卫显式、可测（直接 import 调用）；页面层另由 `src/middleware.ts`（Node runtime）在 HTML 下发前拦截，两者共用同一个 `requireSession`，不会分叉。代价：新增 API 路由须手动加守卫（当前 10 个 route，除 /api/auth 本身豁免外其余均有守卫——含访问记录与营养接口） |
 | 删除保护独立于登录口令 | 场景不同：PASSWORD 防陌生人访问，DELETE_PASSWORD 防自己/家人手滑误删（AI 一键生成的菜谱删除成本远低于手工录入，需要一道刹车） |
 | config 暴露开关布尔值而非密码本身 | 状态可见与秘密保密解耦；api-key/delete-password 泄漏有专项红线测试 |
 
