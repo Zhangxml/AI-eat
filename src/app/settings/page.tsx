@@ -3,7 +3,7 @@
 // 设置页（Task 15，设计 5.5 /settings）：备份导出/导入 + AI 供应商只读展示 + 鉴权状态展示
 // 契约：GET /api/backup → 200 { exportedAt, recipes }（Content-Disposition 附件头）
 //       POST /api/backup { recipes } → 200 { imported, skipped, skippedIds, invalidIds } | 400 { error }
-//       GET /api/config → 200 { aiConfigured, baseUrl, model, authEnabled }（绝不含 apiKey）
+//       GET /api/config → 200 { aiConfigured, baseUrl, model, authEnabled }（绝不含 apiKey；页面只展示 model，不展示 baseUrl）
 //       GET/PATCH /api/settings → 用户级可写偏好（推荐风格等），存服务器 data/settings.json
 // 纯 UI 页无单测（裁定 5），移动端三约束：单列、触摸目标 ≥44px、无横向滚动
 // 「访问记录」入口默认隐藏（避免家人一眼看到审计记录），在「访问鉴权」卡片连点 5 次才显示；
@@ -13,10 +13,10 @@ import Link from 'next/link'
 import { apiFetch } from '@/lib/api-fetch'
 import { createTapReveal } from '@/lib/tap-reveal'
 
-// GET /api/config 响应契约（与 route.ts 一致，绝不含 apiKey 字段）
+// GET /api/config 响应中【本页实际读取的字段子集】（绝不含 apiKey）。
+// 服务端还会返回 baseUrl —— 本页不展示也不声明，多出的字段在此处被忽略，不是漏写
 interface ConfigResponse {
   aiConfigured: boolean
-  baseUrl: string | null
   model: string | null
   authEnabled: boolean
   deleteEnabled: boolean
@@ -384,14 +384,9 @@ export default function SettingsPage() {
             未配置。请在服务器环境变量设置 AI_BASE_URL / AI_API_KEY / AI_MODEL 后重启。
           </p>
         ) : (
-          <div className="flex flex-col gap-1 text-sm">
-            <p className="break-words text-neutral-600 dark:text-neutral-400">
-              接口地址：<span className="break-all text-neutral-900 dark:text-neutral-100">{config.baseUrl}</span>
-            </p>
-            <p className="break-words text-neutral-600 dark:text-neutral-400">
-              模型：<span className="break-all text-neutral-900 dark:text-neutral-100">{config.model}</span>
-            </p>
-          </div>
+          <p className="break-words text-sm text-neutral-600 dark:text-neutral-400">
+            模型：<span className="break-all text-neutral-900 dark:text-neutral-100">{config.model}</span>
+          </p>
         )}
       </section>
 
