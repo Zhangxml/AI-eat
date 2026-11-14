@@ -386,7 +386,7 @@ export default function SettingsPage() {
     <main className="mx-auto max-w-3xl px-4 py-4">
       <h1 className="mb-4 text-lg font-medium text-neutral-900 dark:text-neutral-100">设置</h1>
 
-      {/* 当前账号：名字 + 角色 + 退出登录。角色决定下方是否出现「用户管理」 */}
+      {/* 当前账号：名字 + 角色 + 退出登录（仅密码模式）。角色决定下方是否出现「用户管理」 */}
       {me !== null && (
         <section className="mb-6 flex items-center justify-between gap-2 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
           <div className="min-w-0">
@@ -397,13 +397,17 @@ export default function SettingsPage() {
               {me.role === 'admin' ? '管理员（可管理账号与查看访问记录）' : '普通成员'}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void handleLogout()}
-            className="inline-flex min-h-[32px] shrink-0 items-center rounded-md border border-neutral-300 px-3 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800"
-          >
-            退出登录
-          </button>
+          {/* 免密单用户模式没有登录动作，退出登录没有意义（点了只会清 Cookie 再被弹回首页）：
+              与用户管理一样，等 config 明确为密码模式后才渲染，避免加载中闪一下 */}
+          {config?.authEnabled === true && (
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              className="inline-flex min-h-[32px] shrink-0 items-center rounded-md border border-neutral-300 px-3 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800"
+            >
+              退出登录
+            </button>
+          )}
         </section>
       )}
 
