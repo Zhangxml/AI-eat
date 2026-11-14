@@ -53,3 +53,6 @@ ai-eat.log
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# 数据目录的临时/备份形态（含真实账号与会话密钥，绝不入库）
+data_tmp/
+data_tmp.*/
