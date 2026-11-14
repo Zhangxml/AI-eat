@@ -35,8 +35,14 @@ data/
 | Cookie | `HttpOnly; Path=/; SameSite=Lax; Max-Age=30d`，HTTPS 时加 `Secure` |
 | 守卫 | `requireSession(req)` → `{ok, user}`；`requireAdmin` 额外要求 admin 角色 |
 
-**旧模式兼容**：`data/users.json` 不存在时按「未迁移」处理——放行并返回合成的
-`LEGACY_OWNER`（数据仍在 `data/recipes`），保证升级前功能不变。
+**升级路径（单用户 → 多用户）**：`data/users.json` 不存在时，页面守卫会把访问者引导到
+`/login`，登录页显示「初始化管理员」；**建号时自动接管旧数据**（`src/lib/legacy-migration.ts`：
+把 `data/recipes/*.json` 与 `data/settings.json` 复制到 `data/users/<uid>/`，校验条数后再删源）。
+因此登录页「将接收现有菜谱库」这句承诺是成立的，不需要再手工跑迁移脚本。
+
+> 注意：`src/lib/auth.ts` 仍保留 `LEGACY_OWNER` 分支，用于**已初始化但直连 API** 的极端场景兜底；
+> 页面层现在统一要求登录。
+
 **安全约束**：不允许删除最后一个用户（否则表变空会回落到旧模式、等于关掉鉴权）。
 
 ## 权限矩阵
@@ -60,6 +66,27 @@ data/
 **唯一例外**：`GET /api/backup` 管理员可整体导出所有用户的菜谱（用于整机备份/迁移），
 但导出是只读的，且响应里不含任何凭据。
 
+## 页面守卫（middleware）
+
+未登录访问任何页面时，由 `src/middleware.ts`（Edge）在**服务端**直接 303 到 `/login?next=<原路径>`，
+页面根本不会下发。
+
+为什么不用客户端跳转：页面是客户端组件，`Link` 软导航会先把整页骨架渲染出来，
+数据请求拿到 401 后才整页跳走——实测会闪 4 帧完整骨架（约 850ms）。
+服务端拦截后为 0 帧。
+
+口径与边界：
+
+| 项 | 说明 |
+| --- | --- |
+| 判定依据 | 只检查会话 Cookie **存在性**（Edge 里不验签）。真伪/过期仍由 API 与 handler 守卫判定 |
+| 威胁模型 | 伪造 Cookie 只能拿到静态 HTML 骨架（实测无任何业务数据），API 仍 401 |
+| `/login` | 永远放行，否则重定向循环 |
+| matcher | 排除 `api/`、`_next/`、`__nextjs`、静态后缀（含 json/webmanifest/字体），避免误拦 RSC 与开发工具 |
+| 回跳 | 登录页用 `safeNextPath` 校验：反斜杠/协议相对/绝对 URL/`javascript:` 一律回落首页（防开放重定向） |
+| 登录成功 | 用 `window.location.replace` 而非 `router.replace`——后者会复用「未登录→307」的客户端路由缓存，又被弹回登录页（已实测） |
+| 会话过期 | Cookie 在但无效时会残余一次骨架（API 401 后才跳），属低频路径，可接受 |
+
 ## 登录与初始化
 
 - `GET /api/auth` → `{ needsSetup, enabled, currentUser? }`
@@ -78,6 +105,9 @@ read -r -s PW && printf '%s' "$PW" | node scripts/migrate-multi-user.mjs 爸爸
 
 脚本行为：幂等（有 `users.json` 即退出）→ 整目录备份 → 建管理员 → 移动 `recipes/` 与 `settings.json`
 到 `users/<uid>/` → 校验条数一致（不一致则中止）→ 输出账号与备份路径。
+
+> 与「建号自动接管」的关系：两者都能完成迁移。**若已通过网页建号**，旧数据已被自动接管，
+> 此时再跑脚本会幂等退出（正常）；**若想先备份再迁移**，则先跑脚本、再启动服务。
 
 回滚：`rm -rf data && cp -a data.backup-<时间戳> data`（必须整目录替换——`cp -a .../. data/` 不会删除 `users.json`，等于没回滚）
 

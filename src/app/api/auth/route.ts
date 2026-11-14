@@ -20,6 +20,7 @@ import {
   recordFailure,
 } from '@/lib/login-throttle'
 import { createUser, findUserByName } from '@/lib/user-store'
+import { adoptLegacyData } from '@/lib/legacy-migration'
 
 // 登录失败日志节流：同 IP 60 秒内只写首条 401（防刷满审计窗口）
 const LOG_THROTTLE_MS = 60_000
@@ -96,6 +97,21 @@ export async function POST(req: Request): Promise<Response> {
       return Response.json(
         { error: e instanceof Error ? e.message : '创建失败' },
         { status: 400 },
+      )
+    }
+    // 接管单用户时代的旧数据（data/recipes + data/settings.json）。
+    // 必须在建号后立刻做：登录页文案承诺「将接收现有菜谱库」，且一旦 users.json 存在，
+    // 迁移脚本会幂等跳过——不在这里搬，旧数据就再也进不来。
+    try {
+      await adoptLegacyData(created.id)
+    } catch (e) {
+      // 接管失败不回滚账号（账号已可用），但要让调用方知道数据可能未迁移
+      await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 500, user: created.name })
+      return Response.json(
+        {
+          error: `账号已创建，但接管旧菜谱失败：${e instanceof Error ? e.message : String(e)}。请检查 data 目录权限后重启`,
+        },
+        { status: 500 },
       )
     }
     clearFailures(key)
