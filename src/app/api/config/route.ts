@@ -2,8 +2,8 @@
 // GET 契约（上游裁定 3）：200 { aiConfigured: boolean; baseUrl: string | null; model: string | null; authEnabled: boolean }
 // 安全红线：绝不含 apiKey（key 只留在服务端 env，本接口只回显非敏感的 baseUrl/model）
 // 语义：aiConfigured = AI_BASE_URL / AI_API_KEY / AI_MODEL 三变量全非空（loadAiConfig 同款合取判断）；
-//       authEnabled = 是否已启用多用户（data/users.json 有用户）——多用户改造后不再看 env.PASSWORD
-// 守卫：需登录（未创建任何用户时走旧模式放行）
+//       authEnabled = 是否需要登录 = env.PASSWORD 非空（免密单用户模式为 false，与是否有 users.json 无关）
+// 守卫：requireSession（免密模式自动以管理员身份放行；密码模式需登录）
 import { authEnabled, requireSession } from '@/lib/auth'
 
 // handler 不读请求体；req 供守卫取 Cookie

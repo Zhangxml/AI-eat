@@ -128,7 +128,26 @@ describe('middleware（页面守卫）', () => {
     expect(isPass(await middleware(nextReq('/recipes', cookie)))).toBe(true)
   })
 
-  it('旧模式（从未初始化）→ 放行，交由 /login 引导建号', async () => {
+  it('密码模式 + 未初始化 → 303 到 /login（由登录页引导建号）', async () => {
+    // 旧的「未初始化直接放行」已移除：密码模式下未初始化必须先去 /login 建号
+    expect(isLoginRedirect(await middleware(nextReq('/recipes')))).toBe(true)
+  })
+
+  it('免密模式访问 /login → 303 回首页（不先渲染表单）', async () => {
+    delete process.env.PASSWORD
+    const res = await middleware(nextReq('/login'))
+    expect(res.status).toBe(303)
+    expect(new URL(res.headers.get('location')!).pathname).toBe('/')
+  })
+
+  it('免密模式 + 未初始化 → 放行（自动创建管理员并接管旧数据）', async () => {
+    delete process.env.PASSWORD
     expect(isPass(await middleware(nextReq('/recipes')))).toBe(true)
+    // 自动建出的管理员已落库
+    const { listUsers } = await import('@/lib/user-store')
+    const users = await listUsers()
+    expect(users).toHaveLength(1)
+    expect(users[0].role).toBe('admin')
+    expect(users[0].name).toBe('管理员')
   })
 })

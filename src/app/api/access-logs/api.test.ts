@@ -76,13 +76,15 @@ describe('访问日志', () => {
   })
 
   it('GET /api/access-logs：返回日志数组；日志读取本身不产生新日志', async () => {
+    const admin = await enableMultiUser()
     await appendAccessLog({ ip: '192.168.1.5', method: 'POST', path: '/api/recipes', status: 201 })
-    const res = await GET(new Request('http://x/api/access-logs'))
+    const req = () => new Request('http://x/api/access-logs', { headers: { cookie: admin.cookie } })
+    const res = await GET(req())
     expect(res.status).toBe(200)
     const body = (await res.json()) as { logs: unknown[] }
     expect(body.logs).toHaveLength(1)
     // 读接口不写日志：再读一次数量不变
-    const again = await GET(new Request('http://x/api/access-logs'))
+    const again = await GET(req())
     expect(((await again.json()) as { logs: unknown[] }).logs).toHaveLength(1)
   })
 

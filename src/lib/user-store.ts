@@ -184,10 +184,12 @@ async function mutateUsers<T>(mutate: (users: User[]) => UsersMutation<T>): Prom
       throw err
     }
     const { next, result } = mutate(users)
-    // 每次写前确保 users/ 目录存在（同时作为「已初始化」标记）
-    await fs.mkdir(path.join(dataRoot(), 'users'), { recursive: true })
     const payload: UsersFile = { version: USERS_VERSION, users: next }
+    // 顺序很重要：先写表、再建 users/ 目录。
+    // 反过来的话，并发首次访问会看到「users/ 已存在但 users.json 还没落盘」，
+    // 被 multiUserInitialized() 判成「已迁移但表损坏」→ 偶发 503。
     await atomicWriteFile(usersFilePath(), JSON.stringify(payload, null, 2) + '\n')
+    await fs.mkdir(path.join(dataRoot(), 'users'), { recursive: true })
     return result
   })
   // 队列自身不能因一次失败而中断（否则后续写入全部被拒绝）

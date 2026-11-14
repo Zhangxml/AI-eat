@@ -3,6 +3,7 @@
 // POST /api/users            → 201 { user } | 400（重名/密码过短/格式非法）
 // 安全：本路由首行 requireAdmin；响应体永不包含 passwordHash 或任何凭据
 import { requireAdmin } from '@/lib/auth'
+import { isPasswordlessMode } from '@/lib/auth-mode'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { hashPassword } from '@/lib/password-hash'
@@ -24,6 +25,13 @@ function publicUser(u: User) {
 export async function GET(req: Request): Promise<Response> {
   const auth = await requireAdmin(req)
   if (!auth.ok) return auth.res
+  // 免密单用户模式：系统只有一个身份，不提供用户管理（与界面隐藏保持一致，不留 API 口子）
+  if (isPasswordlessMode()) {
+    return Response.json(
+      { error: '当前为免密单用户模式，不支持用户管理' },
+      { status: 409 },
+    )
+  }
   // 必须已进入多用户模式：旧模式（从未初始化）下不允许建号/改号，
   // 否则可绕过 /api/auth 的引导口令抢先建 admin，并让迁移脚本因幂等而永久跳过
   if (!(await multiUserInitialized())) {
@@ -41,6 +49,14 @@ export async function POST(req: Request): Promise<Response> {
   if (!auth.ok) return auth.res
   const ip = clientIpOf(req)
   if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
+  // 免密单用户模式：不支持创建用户（创建后也无法登录，避免用户困惑）
+  if (isPasswordlessMode()) {
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/users', status: 409 })
+    return Response.json(
+      { error: '当前为免密单用户模式，不支持创建用户；设置 PASSWORD 并重启后可启用多用户' },
+      { status: 409 },
+    )
+  }
   // 必须已进入多用户模式：旧模式（从未初始化）下不允许建号/改号，
   // 否则可绕过 /api/auth 的引导口令抢先建 admin，并让迁移脚本因幂等而永久跳过
   if (!(await multiUserInitialized())) {
@@ -63,7 +79,15 @@ export async function POST(req: Request): Promise<Response> {
   const b = body as Record<string, unknown>
   const name = typeof b.name === 'string' ? b.name.trim() : ''
   const password = typeof b.password === 'string' ? b.password : ''
-  const role = b.role === 'admin' ? 'admin' : 'member'
+  // 管理员只能有一个（密码由 env.PASSWORD 控制，所有 admin 共用同一口令）。
+  // 允许通过接口建 admin 会让「填写的初始密码」静默失效，也让审计里的 user 名不可信。
+  if (b.role === 'admin') {
+    return Response.json(
+      { error: '不支持通过接口创建管理员：管理员密码由环境变量 PASSWORD 控制' },
+      { status: 400 },
+    )
+  }
+  const role = 'member'
   if (name === '' || password === '') {
     return Response.json({ error: '需要 name 与 password' }, { status: 400 })
   }

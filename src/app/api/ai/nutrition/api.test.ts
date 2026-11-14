@@ -27,6 +27,7 @@ const ENV_KEYS = ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_EAT_DATA_DIR', 'A
 describe('POST /api/ai/nutrition', () => {
 
   it('启用鉴权后未带会话 → 401（守卫在 handler 首行，未触 AI 调用）', async () => {
+    process.env.PASSWORD = 'test-password-default' // 切回密码模式
     const admin = await enableMultiUser()
     {
       const denied = await POST(jsonReq({ recipe: { name: '番茄炒蛋', ingredients: [{ name: '番茄', amount: '2个' }], servings: 2 } }))
@@ -44,6 +45,9 @@ describe('POST /api/ai/nutrition', () => {
   let savedEnv: Record<string, string | undefined>
 
   beforeEach(async () => {
+    // 本文件大多数用例不带 Cookie 直调 handler，默认走免密单用户模式；
+    // 401 用例自己切回密码模式（见下一个 it）
+    delete process.env.PASSWORD
     savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-nutrition-api-'))
     process.env.AI_EAT_DATA_DIR = `${dir}/recipes`

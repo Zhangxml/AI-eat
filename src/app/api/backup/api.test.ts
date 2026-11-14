@@ -8,10 +8,14 @@ import path from 'node:path'
 import { GET, POST } from './route'
 import { getRecipe, putRecipe } from '@/lib/recipe-store'
 import { enableMultiUser, makeSession } from '@/lib/test-helpers'
+import { usersDirFor, type User } from '@/lib/user-store'
 import type { Recipe } from '@/lib/recipe-types'
 
-// 构造 GET 请求（守卫只读 Cookie 头；PASSWORD 未启用时不带 Cookie 亦可）
-const getReq = () => new Request('http://x/api/backup')
+// 当前用例的默认会话（beforeEach 里创建管理员后填入）：多用户后所有接口都要登录
+let testCookie = ''
+// 构造 GET 请求（守卫只读 Cookie 头）
+const getReq = () =>
+  new Request('http://x/api/backup', { headers: testCookie ? { cookie: testCookie } : {} })
 
 // 合法完整菜谱夹具：与 recipe-store.test.ts / ai 测试同款形状，id 可过 strict schema
 const baseRecipe: Recipe = {
@@ -43,17 +47,27 @@ const jsonReq = (body: unknown) =>
   new Request('http://x', {
     method: 'POST',
     body: JSON.stringify(body),
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      ...(testCookie ? { cookie: testCookie } : {}),
+    },
   })
 
 // 构造文本 body 的 POST 请求（测非法 JSON 路径）
 const rawReq = (text: string) =>
-  new Request('http://x', { method: 'POST', body: text, headers: { 'content-type': 'application/json' } })
+  new Request('http://x', {
+    method: 'POST',
+    body: text,
+    headers: {
+      'content-type': 'application/json',
+      ...(testCookie ? { cookie: testCookie } : {}),
+    },
+  })
 
 describe('备份接口 /api/backup', () => {
 
   it('多用户模式下未带会话 → GET/POST 均 401', async () => {
-    await enableMultiUser()
+    await enableMultiUser('管理员1')
     expect((await GET(new Request('http://x/api/backup'))).status).toBe(401)
     expect(
       (await POST(new Request('http://x/api/backup', { method: 'POST', body: JSON.stringify({ recipes: [] }), headers: { 'content-type': 'application/json' } }))).status,
@@ -61,7 +75,7 @@ describe('备份接口 /api/backup', () => {
   })
 
   it('导出按角色分流：member 只有 recipes；admin 拿到 users 分组', async () => {
-    const admin = await enableMultiUser()
+    const admin2 = await enableMultiUser('管理员2')
     const member = await makeSession('成员甲', 'member')
 
     // 成员甲导入一条到自己的库
@@ -83,31 +97,39 @@ describe('备份接口 /api/backup', () => {
     expect(mBody.users).toBeUndefined()
 
     // admin 导出：users 分组，含成员甲且不计入自己的库
-    const aBody = (await (await GET(new Request('http://x/api/backup', { headers: { cookie: admin.cookie } }))).json()) as {
+    const aBody = (await (await GET(new Request('http://x/api/backup', { headers: { cookie: admin2.cookie } }))).json()) as {
       recipes: Recipe[]
       users: { name: string; recipes: Recipe[] }[]
     }
     // 顶层 recipes = 管理员自己的库（使导出文件可被 POST 回灌）
     expect(Array.isArray(aBody.recipes)).toBe(true)
-    expect(aBody.users.map(u => u.name).sort()).toEqual(['成员甲', '管理员'].sort())
+    expect(aBody.users.map(u => u.name).sort()).toEqual(['成员甲', '管理员0', '管理员2'].sort())
     const memberBundle = aBody.users.find(u => u.name === '成员甲')!
     expect(memberBundle.recipes.map(r => r.id)).toEqual([baseRecipe.id])
   })
   let dir: string
+  let admin: User
+  let dataDir: string
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-backup-'))
-    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享日志目录
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 日志落到独立的 ${dir}/logs
+    // 大部分用例直接操作 store：预建管理员并把请求带上它的会话
+    const session = await enableMultiUser('管理员0')
+    admin = session.user
+    dataDir = usersDirFor(admin.id)
+    testCookie = session.cookie
   })
 
   afterEach(async () => {
+    testCookie = ''
     await fs.rm(dir, { recursive: true, force: true })
     delete process.env.AI_EAT_DATA_DIR
   })
 
   it('GET 导出：200 + exportedAt + 全部菜谱 + Content-Disposition 附件头', async () => {
-    await putRecipe(baseRecipe)
-    await putRecipe(otherRecipe)
+    await putRecipe(baseRecipe, dataDir)
+    await putRecipe(otherRecipe, dataDir)
     const res = await GET(getReq())
     expect(res.status).toBe(200)
     // 附件下载头：attachment + ai-eat-backup-<YYYYMMDD>.json
@@ -133,7 +155,7 @@ describe('备份接口 /api/backup', () => {
 
   it('POST 导入：新 id 入库、库中已存在同 id 跳过并报告 skippedIds', async () => {
     // 预置 existing 于库中；fresh 不在库中
-    await putRecipe(baseRecipe)
+    await putRecipe(baseRecipe, dataDir)
     const fresh: Recipe = { ...otherRecipe, createdAt: '2021-06-01T00:00:00.000Z', updatedAt: '2021-06-01T00:00:00.000Z' }
     const res = await POST(jsonReq({ recipes: [baseRecipe, fresh] }))
     expect(res.status).toBe(200)
@@ -141,7 +163,7 @@ describe('备份接口 /api/backup', () => {
     expect(body).toMatchObject({ imported: 1, skipped: 1 })
     expect(body.skippedIds).toEqual([baseRecipe.id])
     // 新 id 按原样入库：id 与时间戳均不被改写（putRecipe 语义）
-    const stored = await getRecipe(fresh.id)
+    const stored = await getRecipe(fresh.id, dataDir)
     expect(stored).toEqual(fresh)
   })
 
@@ -152,15 +174,15 @@ describe('备份接口 /api/backup', () => {
     expect(body).toMatchObject({ imported: 2, skipped: 0 })
     expect(body.skippedIds).toEqual([])
     expect(body.invalidIds).toEqual([])
-    expect(await getRecipe(baseRecipe.id)).toEqual(baseRecipe)
-    expect(await getRecipe(otherRecipe.id)).toEqual(otherRecipe)
+    expect(await getRecipe(baseRecipe.id, dataDir)).toEqual(baseRecipe)
+    expect(await getRecipe(otherRecipe.id, dataDir)).toEqual(otherRecipe)
   })
 
   it('POST 单条非法：跳过该条计入 invalidIds，其余条目照常导入', async () => {
     // 四条混合：合法新条 / 带 id 但 strict schema 不过（多余字段）/ 纯字符串（无 id，用 #序号 占位）/ 库中已存在
     // skipped 语义（裁定 2）：冲突与非法均属「跳过」，imported + skipped = 总条数；
     // skippedIds 与 invalidIds 细分跳过构成（skipped = skippedIds.length + invalidIds.length）
-    await putRecipe(baseRecipe)
+    await putRecipe(baseRecipe, dataDir)
     const invalidWithId = { ...otherRecipe, extraField: '脏数据' }
     const res = await POST(jsonReq({ recipes: [otherRecipe, invalidWithId, 'oops', baseRecipe] }))
     expect(res.status).toBe(200)
@@ -172,15 +194,13 @@ describe('备份接口 /api/backup', () => {
     // skipped = skippedIds.length + invalidIds.length（细分构成守恒）
     expect(body.skipped).toBe(body.skippedIds.length + body.invalidIds.length)
     // 合法条目不受非法条目影响，照常入库
-    expect(await getRecipe(otherRecipe.id)).toEqual(otherRecipe)
+    expect(await getRecipe(otherRecipe.id, dataDir)).toEqual(otherRecipe)
   })
 
   it('POST 单条 schema 合法但 id 非法：putRecipe 抛错被捕获，计入 invalidIds，不 500', async () => {
     // 手改备份文件可能带穿越 id（schema 只约束 min(1) 拦不住）：store 层 putRecipe throw，
     // importOne 必须捕获单条异常计入 invalid 分支，其余条目照常导入（I-1 衔接面）
-    // 数据目录改用本用例专属嵌套路径：'../evil' 的越界落点 = dir/evil.json，作用域封闭可断言
-    const nested = path.join(dir, 'nested-store')
-    process.env.AI_EAT_DATA_DIR = nested
+    // 多用户后 store 路径固定为 users/<uid>/recipes：'../evil' 的越界落点是该用户目录下的 evil.json
     const evilId: Recipe = { ...otherRecipe, id: '../evil' }
     const res = await POST(jsonReq({ recipes: [evilId, baseRecipe] }))
     expect(res.status).toBe(200)
@@ -188,11 +208,11 @@ describe('备份接口 /api/backup', () => {
     expect(body).toMatchObject({ imported: 1, skipped: 1 })
     expect(body.invalidIds).toEqual(['../evil'])
     // 合法条目不受影响（落在嵌套 store 目录）
-    expect(await getRecipe(baseRecipe.id)).toEqual(baseRecipe)
-    // 越界落点（dir/evil.json）没有文件
-    await expect(fs.access(path.join(dir, 'evil.json'))).rejects.toThrow()
-    // 嵌套 store 目录里只有合法条目一个文件
-    expect((await fs.readdir(nested)).sort()).toEqual([`${baseRecipe.id}.json`])
+    expect(await getRecipe(baseRecipe.id, dataDir)).toEqual(baseRecipe)
+    // 越界落点（用户目录下的 evil.json）没有文件
+    await expect(fs.access(path.join(dir, 'users', admin.id, 'evil.json'))).rejects.toThrow()
+    // 该用户的菜谱目录里只有合法条目一个文件
+    expect((await fs.readdir(dataDir)).sort()).toEqual([`${baseRecipe.id}.json`])
   })
 
   it('POST 非法结构 → 400 + 中文 error（缺 recipes / recipes 非数组 / 非法 JSON）', async () => {
@@ -218,19 +238,19 @@ describe('备份接口 /api/backup', () => {
   })
 
   it('round trip：导出 → 清库 → 导入 → 全量恢复', async () => {
-    await putRecipe(baseRecipe)
-    await putRecipe(otherRecipe)
+    await putRecipe(baseRecipe, dataDir)
+    await putRecipe(otherRecipe, dataDir)
     const exportRes = await GET(getReq())
     const backupBody = (await exportRes.json()) as { recipes: Recipe[] }
-    // 清库
-    await fs.rm(dir, { recursive: true, force: true })
+    // 清库：只清该用户的数据目录（删整个 dir 会把 users.json 也删掉 → 401）
+    await fs.rm(dataDir, { recursive: true, force: true })
     // 导入导出的原 body
     const importRes = await POST(jsonReq(backupBody))
     expect(importRes.status).toBe(200)
     const body = await importRes.json()
     expect(body).toMatchObject({ imported: 2, skipped: 0 })
-    expect(await getRecipe(baseRecipe.id)).toEqual(baseRecipe)
-    expect(await getRecipe(otherRecipe.id)).toEqual(otherRecipe)
+    expect(await getRecipe(baseRecipe.id, dataDir)).toEqual(baseRecipe)
+    expect(await getRecipe(otherRecipe.id, dataDir)).toEqual(otherRecipe)
   })
 
   it('recipes 超过 5000 条 → 400 中文（审计修复 #4），不触发逐条导入', async () => {
@@ -246,7 +266,11 @@ describe('备份接口 /api/backup', () => {
       new Request('http://x/api/backup', {
         method: 'POST',
         body: JSON.stringify({ recipes: [] }),
-        headers: { 'content-type': 'application/json', 'content-length': String(5 * 1024 * 1024 + 1) },
+        headers: {
+          'content-type': 'application/json',
+          'content-length': String(5 * 1024 * 1024 + 1),
+          cookie: testCookie,
+        },
       }),
     )
     expect(res.status).toBe(413)

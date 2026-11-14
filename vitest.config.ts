@@ -13,5 +13,7 @@ export default defineConfig({
   },
   test: {
     include: ['src/**/*.test.ts'],
+    // 默认进入密码模式（见 vitest.setup.ts）
+    setupFiles: ['./vitest.setup.ts'],
   },
 })

@@ -41,12 +41,11 @@ describe('/api/users', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('尚未初始化（旧模式）→ 409，且不能借此抢占管理员', async () => {
-    // 未建任何用户：users.json 与 users/ 都不存在
+  it('未初始化 → 401（引导到 /login 建号，不能借此抢占管理员）', async () => {
+    // 密码模式 + 未建任何用户：守卫先返回 401，根本到不了建号逻辑
     const res = await POST(json({ name: '陌生人', password: 'hack1234' }))
-    expect(res.status).toBe(409)
-    expect(((await res.json()) as { error: string }).error).toContain('尚未初始化')
-    expect((await GET(new Request('http://x/api/users'))).status).toBe(409)
+    expect(res.status).toBe(401)
+    expect((await GET(new Request('http://x/api/users'))).status).toBe(401)
   })
 
   it('未登录 → 401；member → 403；admin → 200', async () => {
@@ -72,7 +71,7 @@ describe('/api/users', () => {
     expect(users[0].role).toBe('admin')
   })
 
-  it('POST 建号：默认 member；可指定 admin；重名 400；密码过短 400', async () => {
+  it('POST 建号：只能建 member；重名 400；密码过短 400；指定 admin 被拒绝', async () => {
     const admin = await enableMultiUser()
     const ok = await POST(json({ name: '妈妈', password: 'mama-1234' }, admin.cookie))
     expect(ok.status).toBe(201)
@@ -82,9 +81,10 @@ describe('/api/users', () => {
     expect((await POST(json({ name: '妈妈', password: 'x12345' }, admin.cookie))).status).toBe(400)
     expect((await POST(json({ name: '小明', password: 'abc' }, admin.cookie))).status).toBe(400)
 
+    // 管理员密码由 env.PASSWORD 控制：接口不允许再建 admin（否则填写的密码会静默失效）
     const asAdmin = await POST(json({ name: '爸爸2', password: 'papa-1234', role: 'admin' }, admin.cookie))
-    expect(asAdmin.status).toBe(201)
-    expect(((await asAdmin.json()) as { user: { role: string } }).user.role).toBe('admin')
+    expect(asAdmin.status).toBe(400)
+    expect(((await asAdmin.json()) as { error: string }).error).toContain('PASSWORD')
   })
 
   it('POST 建号后该用户可登录（哈希正确写入）', async () => {
@@ -147,7 +147,7 @@ describe('/api/users', () => {
     expect((await DELETE(json({ confirm: '成员' }, admin.cookie, 'DELETE'), ctxOf(member.user.id))).status).toBe(204)
   })
 
-  it('不能降级/禁用/删除最后一个管理员', async () => {
+  it('管理员一律不能降级/禁用/删除', async () => {
     const admin = await enableMultiUser()
     expect((await PATCH(json({ role: 'member' }, admin.cookie, 'PATCH'), ctxOf(admin.user.id))).status).toBe(400)
     expect((await PATCH(json({ disabled: true }, admin.cookie, 'PATCH'), ctxOf(admin.user.id))).status).toBe(400)
@@ -167,6 +167,30 @@ describe('/api/users', () => {
     // 正确确认
     expect((await DELETE(json({ confirm: '鲍勃' }, admin.cookie, 'DELETE'), ctxOf(bob.user.id))).status).toBe(204)
     expect((await listUsers()).map(u => u.name)).toEqual(['管理员'])
+  })
+
+  it('免密单用户模式：GET/POST/PATCH/DELETE 一律 409（与界面隐藏一致）', async () => {
+    delete process.env.PASSWORD
+    const admin = await enableMultiUser()
+    const member = await makeSession('成员', 'member')
+    expect((await GET(new Request('http://x/api/users', { headers: { cookie: admin.cookie } }))).status).toBe(409)
+    expect((await POST(json({ name: '新人', password: 'pass1234' }, admin.cookie))).status).toBe(409)
+    expect((await PATCH(json({ disabled: true }, admin.cookie, 'PATCH'), ctxOf(member.user.id))).status).toBe(409)
+    expect((await DELETE(json({ confirm: '成员' }, admin.cookie, 'DELETE'), ctxOf(member.user.id))).status).toBe(409)
+    // 数据未被动过
+    expect((await listUsers()).map(u => u.name).sort()).toEqual(['成员', '管理员'].sort())
+  })
+
+  it('管理员账号不能改名、不能改密（密码由 env.PASSWORD 控制）', async () => {
+    const admin = await enableMultiUser()
+    expect((await PATCH(json({ name: '改个名' }, admin.cookie, 'PATCH'), ctxOf(admin.user.id))).status).toBe(400)
+    const r = await PATCH(json({ password: 'newpass123' }, admin.cookie, 'PATCH'), ctxOf(admin.user.id))
+    expect(r.status).toBe(400)
+    expect(((await r.json()) as { error: string }).error).toContain('PASSWORD')
+    // 普通成员仍可改名/改密
+    const member = await makeSession('成员', 'member')
+    expect((await PATCH(json({ name: '成员改名' }, admin.cookie, 'PATCH'), ctxOf(member.user.id))).status).toBe(200)
+    expect((await PATCH(json({ password: 'newpass123' }, admin.cookie, 'PATCH'), ctxOf(member.user.id))).status).toBe(200)
   })
 
   it('PATCH/DELETE 不存在的用户 → 404', async () => {

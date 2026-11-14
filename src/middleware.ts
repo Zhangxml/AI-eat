@@ -11,13 +11,15 @@
 // - 未登录（无 Cookie / 签名不对 / 已过期）→ 303 到 /login?next=<原路径>
 // - 用户被禁用 / 已删除 / 改密后 sessionVersion 不符 → 同样 303（旧 token 签名仍合法，但人已无权）
 // - 用户表损坏或为空（503）→ **放行**，让页面把「请从备份恢复」的错误显示出来；跳到登录页只会更困惑
-// - 旧模式（从未初始化）→ requireSession 视为本机用户放行，登录页负责引导建号
+// - 免密单用户（env.PASSWORD 空）→ requireSession 自动建/取管理员并放行，登录页直接跳首页
+// - 密码模式 + 未初始化 → 401 → 303 到 /login 引导建号
 //
 // 为什么不能只在客户端跳转：页面是客户端组件，`Link` 软导航会先把整页骨架渲染出来，
 // 数据请求拿到 401 后才整页跳走——实测会闪完整骨架。
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { requireSession } from '@/lib/auth'
+import { isPasswordlessMode } from '@/lib/auth-mode'
 
 function redirectToLogin(req: NextRequest): NextResponse {
   const url = req.nextUrl.clone()
@@ -31,8 +33,15 @@ function redirectToLogin(req: NextRequest): NextResponse {
 }
 
 export async function middleware(req: NextRequest): Promise<NextResponse> {
-  // 登录页放行（否则重定向循环：未登录 → /login → 又被拦 → ...）
-  if (req.nextUrl.pathname === '/login') return NextResponse.next()
+  // 登录页：
+  // - 免密模式不需要登录 → 服务端直接 303 回首页（不先渲染表单，避免闪一下）
+  // - 密码模式放行（否则未登录 → /login → 又被拦 → 重定向循环）
+  if (req.nextUrl.pathname === '/login') {
+    if (isPasswordlessMode()) {
+      return NextResponse.redirect(new URL('/', req.nextUrl.origin), 303)
+    }
+    return NextResponse.next()
+  }
 
   const auth = await requireSession(req)
   if (auth.ok) return NextResponse.next()

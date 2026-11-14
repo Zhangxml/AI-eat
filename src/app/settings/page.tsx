@@ -202,10 +202,11 @@ export default function SettingsPage() {
     }
   }, [loadConfig, loadSettings, loadMe])
 
-  // 管理员登录后才拉用户列表（member 不请求，避免无谓的 403）
+  // 仅在「密码模式 + 管理员」时拉用户列表：
+  // member 不请求（避免无谓 403）；免密单用户模式整块不显示，也不该请求（API 会 409）
   useEffect(() => {
-    if (me?.role === 'admin') void loadUsers()
-  }, [me, loadUsers])
+    if (me?.role === 'admin' && config?.authEnabled === true) void loadUsers()
+  }, [me, config, loadUsers])
 
   // 退出登录：清 Cookie 后整页跳登录页
   const handleLogout = useCallback(async () => {
@@ -558,8 +559,9 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* 用户管理（仅管理员）：新建 / 禁用 / 删除。删除会连带清空该用户菜谱库 */}
-      {me?.role === 'admin' && (
+      {/* 用户管理（密码模式 + 管理员）：新建 / 禁用 / 删除。删除会连带清空该用户菜谱库。
+          免密单用户模式（env.PASSWORD 为空）整块不显示：系统只有一个身份，界面保持版本一。 */}
+      {me?.role === 'admin' && config?.authEnabled === true && (
         <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
           <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">用户管理</h2>
 
@@ -682,7 +684,7 @@ export default function SettingsPage() {
               : '加载中…'
             : config.authEnabled
               ? '已启用（需用户名 + 密码登录）'
-              : '未启用（局域网信任边界，无需登录）'}
+              : '未启用（免密单用户：系统只有一个身份，仅管理员）'}
         </p>
       </section>
 

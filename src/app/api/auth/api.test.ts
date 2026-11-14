@@ -32,7 +32,8 @@ describe('/api/auth', () => {
     }
     process.env.AI_EAT_DATA_DIR = path.join(root, 'recipes')
     process.env.SESSION_SECRET = 'test-secret-for-auth-api-0123456789'
-    delete process.env.PASSWORD
+    // 默认密码模式：管理员密码由 env.PASSWORD 唯一决定（本文件的初始化密码就是它）
+    process.env.PASSWORD = 'papa-1234'
     // 限流状态是模块级：每个用例前清空，避免测试之间互相影响
     __resetLoginThrottle()
   })
@@ -45,9 +46,13 @@ describe('/api/auth', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('GET：无用户时 needsSetup=true', async () => {
+  it('GET：无用户时 needsSetup=true（密码模式需登录）', async () => {
     const body = await (await GET(getReq())).json()
-    expect(body).toEqual({ needsSetup: true, enabled: false })
+    expect(body).toEqual({
+      needsSetup: true,
+      enabled: true,
+      defaultUsername: '管理员',
+    })
   })
 
   it('POST：首次用 username+password 初始化管理员，并下发会话 Cookie', async () => {
@@ -96,9 +101,9 @@ describe('/api/auth', () => {
     ).toBe(400)
   })
 
-  it('POST：初始化时密码过短 → 400', async () => {
+  it('POST：初始化密码与 env.PASSWORD 不一致 → 401（密码模式下它就是管理员密码）', async () => {
     const res = await POST(loginReq({ username: '爸爸', password: 'abc' }))
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(401)
     expect(await listUsers()).toHaveLength(0)
   })
 
@@ -142,7 +147,7 @@ describe('/api/auth', () => {
   })
 
   it('GET：已登录时返回 currentUser', async () => {
-    const res = await POST(loginReq({ username: '妈妈', password: 'mama-1234' }))
+    const res = await POST(loginReq({ username: '妈妈', password: 'papa-1234' }))
     const cookie = getCookieValue(res.headers.get('set-cookie'))!
     const me = await (await GET(getReq(cookie))).json()
     expect(me.needsSetup).toBe(false)
@@ -186,10 +191,54 @@ describe('/api/auth', () => {
     expect((await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))).status).toBe(503)
   })
 
+  it('PASSWORD 少于 4 位也能完成初始化（密码由 env 决定，不被长度检查卡死）', async () => {
+    process.env.PASSWORD = 'abc'
+    const res = await POST(loginReq({ username: '管理员', password: 'abc' }))
+    expect(res.status).toBe(200)
+    expect(await listUsers()).toHaveLength(1)
+  })
+
+  it('管理员登录只认 env.PASSWORD：改 env 后旧密码立即失效（无需改 users.json）', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect((await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))).status).toBe(200)
+    // 模拟改 env 后重启：同一个用户、同一个 hash，但密码来源已变
+    process.env.PASSWORD = 'new-admin-pw'
+    expect((await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))).status).toBe(401)
+    expect((await POST(loginReq({ username: '爸爸', password: 'new-admin-pw' }))).status).toBe(200)
+  })
+
+  it('免密模式：POST 拒绝登录（409），GET 返回 passwordless + 自动建出的管理员', async () => {
+    delete process.env.PASSWORD
+    const post = await POST(loginReq({ username: '任何人', password: 'whatever' }))
+    expect(post.status).toBe(409)
+    expect(((await post.json()) as { error: string }).error).toContain('免密')
+
+    const body = (await (await GET(getReq())).json()) as {
+      passwordless: boolean
+      needsSetup: boolean
+      currentUser: { name: string; role: string }
+    }
+    expect(body.passwordless).toBe(true)
+    expect(body.needsSetup).toBe(false)
+    expect(body.currentUser).toEqual({ name: '管理员', role: 'admin' })
+    // 自动建号并落库
+    expect((await listUsers()).map(u => u.name)).toEqual(['管理员'])
+  })
+
+  it('免密模式 + 已有管理员 → 登录仍拒绝，但身份沿用最早的管理员', async () => {
+    delete process.env.PASSWORD
+    const first = await POST(loginReq({ username: '甲', password: 'x' }))
+    // 免密模式下 POST 一律 409，不会建号
+    expect(first.status).toBe(409)
+    // 通过 requireSession 自动建「管理员」
+    const body = (await (await GET(getReq())).json()) as { currentUser: { name: string } }
+    expect(body.currentUser.name).toBe('管理员')
+  })
+
   it('并发初始化：只有一个建号成功，另一个 409（不会建出两个账号）', async () => {
     const [a, b] = await Promise.all([
-      POST(loginReq({ username: '甲', password: 'pass1234' })),
-      POST(loginReq({ username: '乙', password: 'pass1234' })),
+      POST(loginReq({ username: '甲', password: 'papa-1234' })),
+      POST(loginReq({ username: '乙', password: 'papa-1234' })),
     ])
     expect([a.status, b.status].sort()).toEqual([200, 409])
     const users = await listUsers()
@@ -217,7 +266,7 @@ describe('建号迁移失败后的自愈', () => {
     }
     process.env.AI_EAT_DATA_DIR = path.join(root, 'recipes')
     process.env.SESSION_SECRET = 'test-secret-for-auth-heal-0123456789'
-    delete process.env.PASSWORD
+    process.env.PASSWORD = 'papa-1234' // 密码模式：管理员登录走 env.PASSWORD
     __resetLoginThrottle()
   })
 

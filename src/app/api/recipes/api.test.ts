@@ -7,6 +7,7 @@ import path from 'node:path'
 import { GET as listR, POST as createR } from './route'
 import { GET as getR, PUT as putR, DELETE as delR } from './[id]/route'
 import { enableMultiUser, makeSession } from '@/lib/test-helpers'
+import { createUser, usersDirFor, type User } from '@/lib/user-store'
 import type { DraftRecipe } from '@/lib/recipe-types'
 
 // 合法草稿：与 recipe-store.test.ts 保持一致
@@ -31,10 +32,16 @@ const ctxOf = (id: string) => ({ params: Promise.resolve({ id }) })
 
 describe('菜谱库 REST API', () => {
   let dir: string
+  // 免密模式下身份是「最早的管理员」，预建出来以便定位其数据目录（users/<uid>/recipes）
+  let admin: User
+  let dataDir: string
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-api-'))
-    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享日志目录
+    process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 日志仍落在 ${dir}/logs
+    delete process.env.PASSWORD // 本文件默认免密模式；鉴权用例自己切回密码模式
+    admin = await createUser({ name: '管理员', passwordHash: 'h' })
+    dataDir = usersDirFor(admin.id)
   })
 
   afterEach(async () => {
@@ -168,18 +175,20 @@ describe('菜谱库 REST API', () => {
     await createR(json(goodDraft))
     // 模拟 Task 3 裁定的宽语义：非法 JSON 与非 .json 文件都会进 store 的 invalidFiles
     // （数据目录已指向 <tmp>/recipes，故写入该子目录）
-    await fs.writeFile(`${dir}/recipes/broken.json`, '{oops', 'utf8')
-    await fs.writeFile(`${dir}/recipes/notes.txt`, 'hello', 'utf8')
+    await fs.mkdir(dataDir, { recursive: true })
+    await fs.writeFile(`${dataDir}/broken.json`, '{oops', 'utf8')
+    await fs.writeFile(`${dataDir}/notes.txt`, 'hello', 'utf8')
     const list = await (await listR(new Request('http://x/api/recipes'))).json()
     expect(list.recipes).toHaveLength(1)
     expect(list.invalidFiles).toEqual(['broken.json'])
   })
 
   it('启用多用户后未带会话 → 401；带会话 → 200（守卫前置，未读 body 未触 store）', async () => {
-    const admin = await enableMultiUser()
+    process.env.PASSWORD = 'test-password-default' // 切回密码模式
+    const session = await enableMultiUser('管理员2')
     // 先带会话建一条，确保后续断言有数据
     const created = await (
-      await createR(json(goodDraft, admin.cookie))
+      await createR(json(goodDraft, session.cookie))
     ).json()
 
     // 无 Cookie：列表/单个/创建/更新/删除一律 401
@@ -192,17 +201,18 @@ describe('菜谱库 REST API', () => {
     expect((await createR(new Request('http://x', { method: 'POST', body: '{oops' }))).status).toBe(401)
 
     // 带合法会话：列表 200，能取到既有菜谱
-    const ok = await listR(new Request('http://x/api/recipes', { headers: { cookie: admin.cookie } }))
+    const ok = await listR(new Request('http://x/api/recipes', { headers: { cookie: session.cookie } }))
     expect(ok.status).toBe(200)
     const body = await ok.json()
     expect(body.recipes).toHaveLength(1)
     expect(body.recipes[0].id).toBe(created.id)
     // 带会话的删除也走通
-    expect((await delR(new Request('http://x', { headers: { cookie: admin.cookie } }), ctxOf(created.id))).status).toBe(204)
+    expect((await delR(new Request('http://x', { headers: { cookie: session.cookie } }), ctxOf(created.id))).status).toBe(204)
   })
 
   it('跨用户隔离：他人菜谱对本用户不可见（列表不出现、直接访问 404）', async () => {
-    await enableMultiUser()
+    process.env.PASSWORD = 'test-password-default' // 切回密码模式（cookie 才生效）
+    await enableMultiUser('管理员2')
     const alice = await makeSession('爱丽丝', 'member')
     const bob = await makeSession('鲍勃', 'member')
 
@@ -262,17 +272,14 @@ describe('菜谱库 REST API', () => {
   })
 
   it('listRecipes 非 ENOENT 故障 → GET 列表 500 中文（审计修复 #8，不再静默当空库）', async () => {
-    // 把数据目录指到一个普通文件上：readdir 抛 ENOTDIR（非 ENOENT），route 必须返回 500
-    const filePath = path.join(dir, 'not-a-dir')
-    await fs.writeFile(filePath, 'x', 'utf8')
-    process.env.AI_EAT_DATA_DIR = filePath
-    try {
-      const res = await listR(new Request('http://x/api/recipes'))
-      expect(res.status).toBe(500)
-      expect(((await res.json()) as { error: string }).error).toContain('菜谱库读取失败')
-    } finally {
-      process.env.AI_EAT_DATA_DIR = `${dir}/recipes` // 指向子目录：日志落到独立的 ${dir}/logs，避免污染共享日志目录
-    }
+    // 先正常请求一次，让免密模式的「旧数据接管」完成（否则目录被破坏后接管会先抛错）
+    expect((await listR(new Request('http://x/api/recipes'))).status).toBe(200)
+    // 把该用户的菜谱目录换成普通文件：readdir 抛 ENOTDIR（非 ENOENT），route 必须返回 500
+    await fs.rm(dataDir, { recursive: true, force: true })
+    await fs.writeFile(dataDir, 'x', 'utf8')
+    const res = await listR(new Request('http://x/api/recipes'))
+    expect(res.status).toBe(500)
+    expect(((await res.json()) as { error: string }).error).toContain('菜谱库读取失败')
   })
 
   it('POST 创建：content-length 超 1MB → 413 { error: 请求体过大 }（审计修复 #4）', async () => {
@@ -289,8 +296,9 @@ describe('菜谱库 REST API', () => {
 
   // 审查 Important：store 写失败（磁盘满/权限）此前会冒泡成 Next 默认 500，且 POST 已先记了 201 审计
   it('写入失败（目录只读）→ 500 中文错误，且审计记 500 而非 201', async () => {
-    // 把数据目录设为只读，模拟 EACCES/ENOSPC 类故障
-    await fs.chmod(dir, 0o555)
+    // 把该用户的菜谱目录设为只读，模拟 EACCES/ENOSPC 类故障
+    await fs.mkdir(dataDir, { recursive: true })
+    await fs.chmod(dataDir, 0o555)
     try {
       const res = await createR(json(goodDraft))
       expect(res.status).toBe(500)
@@ -305,7 +313,7 @@ describe('菜谱库 REST API', () => {
       const statuses = auditLines.map((l) => (JSON.parse(l) as { status: number }).status)
       expect(statuses).not.toContain(201)
     } finally {
-      await fs.chmod(dir, 0o755)
+      await fs.chmod(dataDir, 0o755)
     }
   })
 })

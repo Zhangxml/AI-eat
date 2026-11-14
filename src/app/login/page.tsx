@@ -1,7 +1,8 @@
 'use client'
 
 // 登录页（多用户）：首次使用显示「初始化管理员」，之后显示「用户名 + 密码」登录。
-// 流程：GET /api/auth 查 needsSetup → POST /api/auth { username, password } → 200 跳首页
+// 免密单用户模式（env.PASSWORD 为空）下不显示任何表单，直接跳回目标页。
+// 流程：GET /api/auth 查 passwordless / needsSetup → POST /api/auth { username, password } → 200 跳首页
 // 用原生 fetch 而非 apiFetch：apiFetch 会对 401 整页跳 /login，登录失败的 401 会触发「登录页 → 登录页」死循环
 import { useEffect, useRef, useState } from 'react'
 import { safeNextPath } from '@/lib/safe-next-path'
@@ -9,6 +10,10 @@ import { safeNextPath } from '@/lib/safe-next-path'
 interface AuthState {
   needsSetup: boolean
   enabled: boolean
+  /** 免密单用户模式：直接进站，不显示表单 */
+  passwordless?: boolean
+  /** 用户名预填（第一个管理员的实际名字；管理员禁止改名，所以稳定） */
+  defaultUsername?: string
   currentUser?: { name: string; role: string }
 }
 
@@ -38,10 +43,12 @@ export default function LoginPage() {
       .then((data: AuthState) => {
         if (!alive) return
         setState(data)
-        // 已登录直接回目标页。
+        // 预填用户名：管理员禁止改名，所以这个值稳定；用户只需输密码
+        if (data.defaultUsername) setUsername(data.defaultUsername)
+        // 已登录 / 免密模式直接回目标页。
         // 必须整页跳转（location.replace）：登录态刚变化时，Next 客户端路由缓存里可能还存着
         // 「未登录 → 307 到 /login」的预取结果，用 router.replace 会复用该缓存、又被弹回登录页。
-        if (data.currentUser) window.location.replace(targetRef.current)
+        if (data.currentUser || data.passwordless) window.location.replace(targetRef.current)
       })
       .catch(() => {
         // 查询失败：保守按「需要登录」处理，提交后由服务端裁决

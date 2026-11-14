@@ -1,5 +1,8 @@
 # 模块：鉴权（PASSWORD 登录 + 删除保护）+ 访问记录
 
+> 注意：本文件描述的是**单口令旧实现**（`env.PASSWORD` 即登录口令）。
+> 多用户改造后请以 `docs/design/multi-user/README.md` 为准——现在是「免密单用户 / 密码模式」双模式。
+
 > 代码位置：`src/lib/auth.ts`（会话与口令）、`src/lib/access-log.ts`（访问日志）、
 > `src/app/api/auth/route.ts`（登录接口）、`src/app/login/page.tsx`（登录页）、
 > `src/app/api/config/route.ts`（开关状态）、`src/lib/api-fetch.ts`（前端 401 处理）、

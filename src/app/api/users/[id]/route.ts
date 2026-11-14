@@ -8,13 +8,13 @@
 // - 删除会递归删 data/users/<uid>/，需 body { confirm: '<用户名>' } 二次确认
 import { promises as fs } from 'node:fs'
 import { requireAdmin } from '@/lib/auth'
+import { isPasswordlessMode } from '@/lib/auth-mode'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { hashPassword } from '@/lib/password-hash'
 import {
   deleteUser,
   getUser,
-  listUsers,
   multiUserInitialized,
   updateUser,
   userDir,
@@ -27,17 +27,16 @@ function publicUser(u: User) {
   return { id: u.id, name: u.name, role: u.role, disabled: u.disabled, createdAt: u.createdAt }
 }
 
-async function otherActiveAdminExists(excludeId: string): Promise<boolean> {
-  const users = await listUsers()
-  return users.some(u => u.id !== excludeId && u.role === 'admin' && !u.disabled)
-}
-
 export async function PATCH(
   req: Request,
   ctx: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   const auth = await requireAdmin(req)
   if (!auth.ok) return auth.res
+  // 免密单用户模式：不提供用户管理
+  if (isPasswordlessMode()) {
+    return Response.json({ error: '当前为免密单用户模式，不支持用户管理' }, { status: 409 })
+  }
   const ip = clientIpOf(req)
   if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   // 必须已进入多用户模式：旧模式（从未初始化）下不允许建号/改号，
@@ -69,12 +68,23 @@ export async function PATCH(
   const patch: Parameters<typeof updateUser>[1] = {}
 
   if (b.name !== undefined) {
+    // 管理员禁止改名：登录页的用户名预填依赖「管理员名字稳定」
+    if (target.role === 'admin') {
+      return Response.json({ error: '管理员账号不能改名' }, { status: 400 })
+    }
     if (typeof b.name !== 'string' || b.name.trim() === '') {
       return Response.json({ error: 'name 须为非空字符串' }, { status: 400 })
     }
     patch.name = b.name.trim()
   }
   if (b.password !== undefined) {
+    // 管理员密码由 env.PASSWORD 唯一决定：改 users.json 里的 hash 不会生效，必须拒绝而不是静默无效
+    if (target.role === 'admin') {
+      return Response.json(
+        { error: '管理员密码由环境变量 PASSWORD 控制，不能在此修改' },
+        { status: 400 },
+      )
+    }
     if (typeof b.password !== 'string' || b.password.length < MIN_PASSWORD_LEN) {
       return Response.json({ error: `密码至少 ${MIN_PASSWORD_LEN} 位` }, { status: 400 })
     }
@@ -98,8 +108,10 @@ export async function PATCH(
     if (b.role !== 'admin' && b.role !== 'member') {
       return Response.json({ error: 'role 须为 admin 或 member' }, { status: 400 })
     }
-    if (b.role === 'member' && target.role === 'admin' && !(await otherActiveAdminExists(target.id))) {
-      return Response.json({ error: '不能降级最后一个管理员' }, { status: 400 })
+    // 管理员一律不可降级：管理员密码来自 env.PASSWORD，降级后会走 scrypt 校验，
+    // 而免密期创建的管理员只有一个随机占位 hash —— 等于把账号永久锁死。
+    if (b.role === 'member' && target.role === 'admin') {
+      return Response.json({ error: '管理员账号不能降级' }, { status: 400 })
     }
     patch.role = b.role
   }
@@ -120,6 +132,10 @@ export async function DELETE(
 ): Promise<Response> {
   const auth = await requireAdmin(req)
   if (!auth.ok) return auth.res
+  // 免密单用户模式：不提供用户管理
+  if (isPasswordlessMode()) {
+    return Response.json({ error: '当前为免密单用户模式，不支持用户管理' }, { status: 409 })
+  }
   const ip = clientIpOf(req)
   if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   // 必须已进入多用户模式：旧模式（从未初始化）下不允许建号/改号，

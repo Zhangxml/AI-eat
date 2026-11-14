@@ -19,6 +19,7 @@ vi.mock('@/lib/recipe-store', async importOriginal => {
 
 import { POST } from './route'
 import { enableMultiUser } from '@/lib/test-helpers'
+import { createUser, userSettingsPath } from '@/lib/user-store'
 import { aiChatStream, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { listRecipes, createRecipe } from '@/lib/recipe-store'
 import type { Recipe } from '@/lib/recipe-types'
@@ -117,6 +118,7 @@ const ENV_KEYS = [
 describe('POST /api/ai/chat', () => {
 
   it('启用鉴权后未带会话 → 401（守卫在 handler 首行，未触 AI 调用）', async () => {
+    process.env.PASSWORD = 'test-password-default' // 切回密码模式
     const admin = await enableMultiUser()
     {
       const denied = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
@@ -134,6 +136,9 @@ describe('POST /api/ai/chat', () => {
   let savedEnv: Record<string, string | undefined>
 
   beforeEach(async () => {
+    // 本文件大多数用例不带 Cookie 直调 handler，默认走免密单用户模式；
+    // 401 用例自己切回密码模式（见下一个 it）
+    delete process.env.PASSWORD
     savedEnv = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]]))
     // 隔离本地 .env 的温度覆盖，保证断言的是代码默认值
     delete process.env.AI_TEMP_CHAT
@@ -185,7 +190,11 @@ describe('POST /api/ai/chat', () => {
     expect(sent.slice(1)).toEqual([{ role: 'user', content: '今天吃什么' }])
   })
 
-  it('推荐风格取自全局设置（data/settings.json）：默认 home，切 creative 后生效，URL 的 ?style= 不再影响', async () => {
+  it('推荐风格取自用户设置（users/<uid>/settings.json）：默认 home，切 creative 后生效，URL 的 ?style= 不再影响', async () => {
+    // 多用户后设置按用户隔离（免密模式的身份是最早的管理员）。先建出该账号，
+    // 断言写在它的 users/<uid>/settings.json 上（不再是全局 data/settings.json）
+    const admin = await createUser({ name: '管理员', passwordHash: 'h' })
+
     // 1) 无设置文件 → home 人设
     aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
     await POST(jsonReq({ messages: [{ role: 'user', content: '今天吃什么' }] }))
@@ -194,8 +203,10 @@ describe('POST /api/ai/chat', () => {
     expect(sysContent).toContain('湖北家常菜 AI 菜谱助手')
     expect(sysContent).not.toContain('有新意的搭配')
 
-    // 2) 设置文件改为 creative → 即使 URL 仍带 ?style=home 也以设置为准（服务端单一事实来源）
-    await fs.writeFile(`${dir}/settings.json`, JSON.stringify({ version: 1, style: 'creative' }), 'utf8')
+    // 2) 该用户的设置改为 creative → 即使 URL 仍带 ?style=home 也以设置为准（服务端单一事实来源）
+    const userSettings = userSettingsPath(admin.id)
+    await fs.mkdir(path.dirname(userSettings), { recursive: true })
+    await fs.writeFile(userSettings, JSON.stringify({ version: 1, style: 'creative' }), 'utf8')
     aiChatStreamMock.mockResolvedValueOnce(sseResponse(upstreamFor(aiRecipe)))
     await POST(
       new Request('http://x/api/ai/chat?style=home', {
