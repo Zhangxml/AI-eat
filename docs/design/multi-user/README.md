@@ -79,13 +79,15 @@ data/
 
 | 项 | 说明 |
 | --- | --- |
-| 判定依据 | 只检查会话 Cookie **存在性**（Edge 里不验签）。真伪/过期仍由 API 与 handler 守卫判定 |
-| 威胁模型 | 伪造 Cookie 只能拿到静态 HTML 骨架（实测无任何业务数据），API 仍 401 |
+| 判定依据 | 无 Cookie → 直接重定向；**有 Cookie 则验签 + 验过期**（`src/lib/edge-session.ts`，Web Crypto） |
+| 密钥来源 | `env.SESSION_SECRET`。`run.sh` 启动时从 `data/.session-secret` 自动注入；Docker 由 `docker-entrypoint.sh` 注入；直接 `next start` 需自行设置（未设置时退化为只查存在性，不锁死用户） |
+| 为何不能只查存在性 | Cookie 按 domain 匹配、**不区分端口**：另一个实例（如临时测试端口）留下的 Cookie 会被带来，导致骨架先渲染、再被 401 踢走（闪一下） |
+| 威胁模型 | 伪造/过期 Cookie 会被验签拦下（不再渲染骨架）；验签只覆盖「签名/过期」，「用户被禁用/改密后旧会话」仍由 API 守卫兜底 |
 | `/login` | 永远放行，否则重定向循环 |
 | matcher | 排除 `api/`、`_next/`、`__nextjs`、静态后缀（含 json/webmanifest/字体），避免误拦 RSC 与开发工具 |
 | 回跳 | 登录页用 `safeNextPath` 校验：反斜杠/协议相对/绝对 URL/`javascript:` 一律回落首页（防开放重定向） |
 | 登录成功 | 用 `window.location.replace` 而非 `router.replace`——后者会复用「未登录→307」的客户端路由缓存，又被弹回登录页（已实测） |
-| 会话过期 | Cookie 在但无效时会残余一次骨架（API 401 后才跳），属低频路径，可接受 |
+| 会话过期 | 验签含过期校验，过期/伪造 Cookie 同样 303，不残余骨架。唯一残余骨架的场景是「用户被禁用/改密后仍有旧 token」：middleware 读不到 `users.json`（Edge 无文件系统），需 API 层 401 后才跳，属低频路径 |
 
 ## 登录与初始化
 

@@ -37,6 +37,8 @@ yarn-error.log*
 
 # 运行期数据目录（AI_EAT_DATA_DIR 约定的默认数据落盘位置）
 data/
+# 迁移脚本/手工备份产生的整目录快照（含真实菜谱数据，绝不入库）
+data.backup-*/
 
 # 裸机部署运行期产物（run.sh）
 ai-eat.log
