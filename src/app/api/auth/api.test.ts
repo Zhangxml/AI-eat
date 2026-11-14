@@ -1,149 +1,188 @@
-// /api/auth 路由单测（Task 16）：POST 登录签发会话 Cookie / GET 查询鉴权开关
-// env 用快照接管 + afterEach 恢复（PASSWORD 影响签发与校验两侧）
+// /api/auth 单测（多用户改造后）：
+// 首次初始化 → 登录 → 会话 → 登出；失败限流；用户名枚举防护；禁用账号拒绝
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import path from 'node:path'
-import os from 'node:os'
 import { promises as fs } from 'node:fs'
-import { POST, GET } from './route'
-import { isValidToken, SESSION_COOKIE } from '@/lib/auth'
+import os from 'node:os'
+import path from 'node:path'
+import { GET, POST } from './route'
+import { getCookieValue } from './test-utils'
+import { __resetLoginThrottle } from '@/lib/login-throttle'
+import { getUser, listUsers, updateUser } from '@/lib/user-store'
 
-// 测试局部 env 字面量经 unknown 中转：Next 的 global.d.ts 把 ProcessEnv.NODE_ENV 声明为必填，
-// 直接 as NodeJS.ProcessEnv 因重叠不足被 TS 拒绝（同 ai-client.test.ts 的既有处理）
-const envOf = (vars: Record<string, string>): NodeJS.ProcessEnv => vars as unknown as NodeJS.ProcessEnv
-
-// POST 请求构造：带 JSON body
-const post = (body: unknown, headers: Record<string, string> = {}) =>
+const loginReq = (body: unknown) =>
   new Request('http://x/api/auth', {
     method: 'POST',
     body: JSON.stringify(body),
-    headers: { 'content-type': 'application/json', ...headers },
+    headers: { 'content-type': 'application/json' },
   })
 
-// Set-Cookie 值解析：name=值; 属性串 → { value, attrs }
-function parseSetCookie(header: string): { value: string; attrs: string[] } {
-  const segs = header.split(';')
-  const pair = segs[0] ?? ''
-  const eq = pair.indexOf('=')
-  return { value: pair.slice(eq + 1), attrs: segs.slice(1).map(s => s.trim()) }
-}
+const getReq = (cookie?: string) =>
+  new Request('http://x/api/auth', { headers: cookie ? { cookie } : {} })
 
 describe('/api/auth', () => {
-  let envSnapshot: NodeJS.ProcessEnv
-  let dir: string
+  let root: string
+  let prevEnv: Record<string, string | undefined>
 
-  // 测试隔离（审查 Critical）：/api/auth 每次调用都会 appendAccessLog 写 data/logs/access.jsonl。
-  // 不隔离 AI_EAT_DATA_DIR 时，跑测试会向真实审计日志写入假记录，并在容量满时滚动丢弃真实记录。
   beforeEach(async () => {
-    envSnapshot = { ...process.env }
-    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-auth-api-'))
-    process.env.AI_EAT_DATA_DIR = `${dir}/recipes`
-    process.env.PASSWORD = 'p'
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-auth-api-'))
+    prevEnv = {
+      AI_EAT_DATA_DIR: process.env.AI_EAT_DATA_DIR,
+      SESSION_SECRET: process.env.SESSION_SECRET,
+      PASSWORD: process.env.PASSWORD,
+    }
+    process.env.AI_EAT_DATA_DIR = path.join(root, 'recipes')
+    process.env.SESSION_SECRET = 'test-secret-for-auth-api-0123456789'
+    delete process.env.PASSWORD
+    // 限流状态是模块级：每个用例前清空，避免测试之间互相影响
+    __resetLoginThrottle()
   })
 
   afterEach(async () => {
-    process.env = envSnapshot
-    await fs.rm(dir, { recursive: true, force: true })
-  })
-
-  it('正确密码 → 200 且 Set-Cookie 含 HttpOnly/Path=/ /SameSite=Lax/Max-Age=2592000，token 可验', async () => {
-    const res = await POST(post({ password: 'p' }))
-    expect(res.status).toBe(200)
-    const setCookie = res.headers.get('set-cookie')
-    expect(setCookie).toBeTruthy()
-    const { value, attrs } = parseSetCookie(setCookie as string)
-    expect(attrs).toEqual(expect.arrayContaining(['HttpOnly', 'Path=/', 'SameSite=Lax', 'Max-Age=2592000']))
-    // 签发的 token 必须能通过守卫的同一密钥校验
-    expect(isValidToken(value, envOf({ PASSWORD: 'p' }))).toBe(true)
-    expect((await res.json())).toEqual({ ok: true })
-  })
-
-  it('纯 HTTP（x-forwarded-proto: http）不带 Secure；HTTPS 代理（首段 https）带 Secure', async () => {
-    // 局域网纯 HTTP：绝不卡死登录（LibreTV 关键坑）
-    const httpRes = await POST(post({ password: 'p' }, { 'x-forwarded-proto': 'http' }))
-    const httpCookie = parseSetCookie(httpRes.headers.get('set-cookie') as string)
-    expect(httpCookie.attrs).not.toContain('Secure')
-    // 反代终止 TLS：x-forwarded-proto 首段 https → Secure
-    const httpsRes = await POST(post({ password: 'p' }, { 'x-forwarded-proto': 'https,http' }))
-    const httpsCookie = parseSetCookie(httpsRes.headers.get('set-cookie') as string)
-    expect(httpsCookie.attrs).toContain('Secure')
-    expect(SESSION_COOKIE).toBe('ai-eat-session')
-  })
-
-  it('缺失 x-forwarded-proto 头（纯 HTTP 直连默认路径）→ Set-Cookie 不含 Secure', async () => {
-    // post() 默认不带该头：无代理头时绝不发 Secure，局域网 HTTP 直连不被卡死（LibreTV 坑回归面，
-    // 锁定「不许改从 req.url 推导」之外的另一侧：默认路径必须无 Secure）
-    const res = await POST(post({ password: 'p' }))
-    const cookie = parseSetCookie(res.headers.get('set-cookie') as string)
-    expect(cookie.attrs).not.toContain('Secure')
-  })
-
-  it('错误密码 → 401 { error } 中文', async () => {
-    const res = await POST(post({ password: 'wrong' }))
-    expect(res.status).toBe(401)
-    expect(((await res.json()) as { error: string }).error).toBeTruthy()
-  })
-
-  it('body 非法（非 JSON / 缺 password / password 非字符串）→ 400 { error }', async () => {
-    const broken = new Request('http://x/api/auth', { method: 'POST', body: '{oops', headers: { 'content-type': 'application/json' } })
-    expect((await POST(broken)).status).toBe(400)
-    expect((await POST(post({}))).status).toBe(400)
-    expect((await POST(post({ password: 123 }))).status).toBe(400)
-  })
-
-  it('PASSWORD 未设：POST 正确密码也 401（无合法口令）；GET → { enabled: false }', async () => {
-    delete process.env.PASSWORD
-    const res = await POST(post({ password: 'p' }))
-    expect(res.status).toBe(401)
-    const getRes = await GET()
-    expect(await getRes.json()).toEqual({ enabled: false })
-  })
-
-  it('GET：PASSWORD 已设 → { enabled: true }（登录页判断用，不受守卫保护）', async () => {
-    const res = await GET()
-    expect(await res.json()).toEqual({ enabled: true })
-  })
-
-  it('401 登录失败日志 60 秒节流（审计修复 #7）：同 IP 只记首条，窗口外恢复', async () => {
-    // 用真实 appendAccessLog 落盘验证；用独立 XFF IP 作节流键（TRUST_PROXY=true 打开 XFF 读取），
-    // 避免与同文件其他 401 用例共享 'unknown' 键而撞上已开启的 60 秒窗口
-    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-auth-'))
-    process.env.AI_EAT_DATA_DIR = `${dataDir}/data/recipes`
-    process.env.TRUST_PROXY = 'true'
-    const postFrom = (ip: string, password: unknown) =>
-      new Request('http://x/api/auth', {
-        method: 'POST',
-        body: JSON.stringify({ password }),
-        headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
-      })
-    try {
-      // 首次 401：记 1 条；紧接着两次 401：60 秒窗口内被节流，不再追加
-      await POST(postFrom('10.99.99.1', 'wrong'))
-      await POST(postFrom('10.99.99.1', 'wrong'))
-      await POST(postFrom('10.99.99.1', 'wrong'))
-      const { readAccessLogs } = await import('@/lib/access-log')
-      const failLogs = (await readAccessLogs()).filter(l => l.status === 401)
-      expect(failLogs).toHaveLength(1)
-      expect(failLogs[0].ip).toBe('10.99.99.1')
-      // 成功登录照常记录（200 不受节流影响）
-      await POST(postFrom('10.99.99.1', 'p'))
-      const okLogs = (await readAccessLogs()).filter(l => l.status === 200)
-      expect(okLogs).toHaveLength(1)
-    } finally {
-      delete process.env.TRUST_PROXY
-      await fs.rm(dataDir, { recursive: true, force: true })
-      delete process.env.AI_EAT_DATA_DIR
+    for (const [k, v] of Object.entries(prevEnv)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
     }
+    await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('content-length 超 1MB → 413（审计修复 #4），不进入密码校验', async () => {
-    const res = await POST(
-      new Request('http://x/api/auth', {
-        method: 'POST',
-        body: JSON.stringify({ password: 'p' }),
-        headers: { 'content-type': 'application/json', 'content-length': String(1024 * 1024 + 1) },
-      }),
+  it('GET：无用户时 needsSetup=true', async () => {
+    const body = await (await GET(getReq())).json()
+    expect(body).toEqual({ needsSetup: true, enabled: false })
+  })
+
+  it('POST：首次用 username+password 初始化管理员，并下发会话 Cookie', async () => {
+    const res = await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; user: { name: string; role: string } }
+    expect(body.ok).toBe(true)
+    expect(body.user).toEqual({ name: '爸爸', role: 'admin' })
+    const cookie = getCookieValue(res.headers.get('set-cookie'))
+    expect(cookie).toBeTruthy()
+    // 会话可用
+    const me = await (await GET(getReq(cookie!))).json()
+    expect(me.currentUser).toEqual({ name: '爸爸', role: 'admin' })
+    // 用户已入库，且存的是哈希
+    const users = await listUsers()
+    expect(users).toHaveLength(1)
+    expect(users[0].passwordHash).toMatch(/^scrypt\$/)
+    expect(users[0].passwordHash).not.toContain('papa-1234')
+  })
+
+  it('POST：初始化后再次登录需用户名+密码；错误密码 401；正确 200', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    const bad = await POST(loginReq({ username: '爸爸', password: 'wrong' }))
+    expect(bad.status).toBe(401)
+    const good = await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect(good.status).toBe(200)
+  })
+
+  it('POST：不存在的用户名与错误密码返回同一文案（防枚举）', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    const noUser = await POST(loginReq({ username: '不存在的人', password: 'whatever' }))
+    const badPw = await POST(loginReq({ username: '爸爸', password: 'whatever' }))
+    expect(noUser.status).toBe(401)
+    expect(badPw.status).toBe(401)
+    expect(((await noUser.json()) as { error: string }).error).toBe(
+      ((await badPw.json()) as { error: string }).error,
     )
-    expect(res.status).toBe(413)
-    expect(((await res.json()) as { error: string }).error).toBe('请求体过大')
+  })
+
+  it('POST：缺字段/非 JSON → 400', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect((await POST(loginReq({ username: '爸爸' }))).status).toBe(400)
+    expect((await POST(loginReq({}))).status).toBe(400)
+    expect(
+      (await POST(new Request('http://x/api/auth', { method: 'POST', body: '{oops' }))).status,
+    ).toBe(400)
+  })
+
+  it('POST：初始化时密码过短 → 400', async () => {
+    const res = await POST(loginReq({ username: '爸爸', password: 'abc' }))
+    expect(res.status).toBe(400)
+    expect(await listUsers()).toHaveLength(0)
+  })
+
+  it('POST：设置了 env.PASSWORD 时，初始化需先输该引导口令', async () => {
+    process.env.PASSWORD = 'bootstrap-pw'
+    const denied = await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect(denied.status).toBe(401)
+    expect(await listUsers()).toHaveLength(0)
+    const ok = await POST(loginReq({ username: '爸爸', password: 'bootstrap-pw' }))
+    expect(ok.status).toBe(200)
+  })
+
+  it('被禁用的账号无法登录 → 401', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    const [u] = await listUsers()
+    await updateUser(u.id, { disabled: true })
+    const res = await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect(res.status).toBe(401)
+  })
+
+  it('登录失败 5 次后进入退避（429）', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    for (let i = 0; i < 5; i++) {
+      const r = await POST(loginReq({ username: '爸爸', password: 'wrong' }))
+      expect(r.status).toBe(401)
+    }
+    const blocked = await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect(blocked.status).toBe(429)
+    expect(((await blocked.json()) as { error: string }).error).toContain('频繁')
+  })
+
+  it('改密（sessionVersion +1）后旧 Cookie 失效', async () => {
+    const res = await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    const cookie = getCookieValue(res.headers.get('set-cookie'))!
+    expect((await (await GET(getReq(cookie))).json()).currentUser).toBeTruthy()
+
+    const [u] = await listUsers()
+    await updateUser(u.id, { sessionVersion: u.sessionVersion + 1 })
+    const after = await (await GET(getReq(cookie))).json()
+    expect(after.currentUser).toBeUndefined()
+  })
+
+  it('GET：已登录时返回 currentUser', async () => {
+    const res = await POST(loginReq({ username: '妈妈', password: 'mama-1234' }))
+    const cookie = getCookieValue(res.headers.get('set-cookie'))!
+    const me = await (await GET(getReq(cookie))).json()
+    expect(me.needsSetup).toBe(false)
+    expect(me.enabled).toBe(true)
+    expect(me.currentUser.name).toBe('妈妈')
+  })
+
+  it('已迁移后 users.json 被截断 → 全站 503（不能退化成无鉴权）', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    // 模拟掉电/半写：截断文件
+    await fs.writeFile(path.join(root, 'users.json'), '{"version":1,"users":[{"id":"u-1', 'utf8')
+    const { GET: recipesGet } = await import('@/app/api/recipes/route')
+    const res = await recipesGet(new Request('http://x/api/recipes'))
+    expect(res.status).toBe(503)
+    expect(((await res.json()) as { error: string }).error).toContain('用户表损坏')
+  })
+
+  it('已迁移后 users.json 被删除（users/ 目录仍在）→ 503 且不可被抢建号', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    await fs.rm(path.join(root, 'users.json'))
+    const { GET: recipesGet } = await import('@/app/api/recipes/route')
+    expect((await recipesGet(new Request('http://x/api/recipes'))).status).toBe(503)
+    // 不能进入 bootstrap：否则任何人都能接管
+    const preempt = await POST(loginReq({ username: '陌生人', password: 'hack1234' }))
+    expect(preempt.status).toBe(401)
+    expect((await GET(getReq())).status).toBe(200) // GET 仍返回 needsSetup:false/enabled:true
+    const body = await (await GET(getReq())).json()
+    expect(body.needsSetup).toBe(false)
+  })
+
+  it('空表 {"users":[]} → 503（不当成未迁移）', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    await fs.writeFile(path.join(root, 'users.json'), JSON.stringify({ version: 1, users: [] }), 'utf8')
+    const { GET: recipesGet } = await import('@/app/api/recipes/route')
+    expect((await recipesGet(new Request('http://x/api/recipes'))).status).toBe(503)
+  })
+
+  it('用户存在后 getUser 能按 id 查到（初始化链路完整）', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    const [u] = await listUsers()
+    expect((await getUser(u.id))?.name).toBe('爸爸')
   })
 })

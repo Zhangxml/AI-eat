@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { GET as listR, POST as createR } from './route'
 import { GET as getR, PUT as putR, DELETE as delR } from './[id]/route'
-import { issueToken } from '@/lib/auth'
+import { enableMultiUser, makeSession } from '@/lib/test-helpers'
 import type { DraftRecipe } from '@/lib/recipe-types'
 
 // 合法草稿：与 recipe-store.test.ts 保持一致
@@ -16,9 +16,15 @@ const goodDraft: DraftRecipe = {
   steps: ['番茄切块'], source: 'ai',
 }
 
-// 构造带 JSON body 的请求（handler 只读 body，不关心 method）
-const json = (body: unknown) =>
-  new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })
+// 构造带 JSON body 的请求（handler 只读 body，不关心 method）；可选带会话 Cookie
+const json = (body: unknown, cookie?: string) =>
+  new Request('http://x', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    headers: cookie
+      ? { 'content-type': 'application/json', cookie }
+      : { 'content-type': 'application/json' },
+  })
 
 // Next 15 动态路由 ctx：params 为 Promise
 const ctxOf = (id: string) => ({ params: Promise.resolve({ id }) })
@@ -169,31 +175,58 @@ describe('菜谱库 REST API', () => {
     expect(list.invalidFiles).toEqual(['broken.json'])
   })
 
-  it('启用鉴权后未带会话 → 401；带合法会话 Cookie → 200（守卫前置，未读 body 未触 store）', async () => {
-    const created = await (await createR(json(goodDraft))).json()
-    try {
-      process.env.PASSWORD = 'test-pw'
-      // 无 Cookie：列表/单个/创建/更新/删除一律 401
-      expect((await listR(new Request('http://x/api/recipes'))).status).toBe(401)
-      expect((await getR(new Request('http://x'), ctxOf(created.id))).status).toBe(401)
-      expect((await createR(json(goodDraft))).status).toBe(401)
-      expect((await putR(json(goodDraft), ctxOf(created.id))).status).toBe(401)
-      expect((await delR(new Request('http://x'), ctxOf(created.id))).status).toBe(401)
-      // 401 拦截在前：未消费 body 的请求带着非法 body 也先被守卫拦下（守卫是 handler 首行）
-      expect((await createR(new Request('http://x', { method: 'POST', body: '{oops' }))).status).toBe(401)
-      // 带合法会话：列表 200，能取到既有菜谱
-      const token = issueToken()
-      const ok = await listR(new Request('http://x/api/recipes', { headers: { cookie: `ai-eat-session=${token}` } }))
-      expect(ok.status).toBe(200)
-      const body = await ok.json()
-      expect(body.recipes).toHaveLength(1)
-      expect(body.recipes[0].id).toBe(created.id)
-      // 带会话的删除也走通（守卫放行后正常业务路径）
-      expect((await delR(new Request('http://x', { headers: { cookie: `ai-eat-session=${token}` } }), ctxOf(created.id))).status).toBe(204)
-    } finally {
-      delete process.env.PASSWORD
-    }
+  it('启用多用户后未带会话 → 401；带会话 → 200（守卫前置，未读 body 未触 store）', async () => {
+    const admin = await enableMultiUser()
+    // 先带会话建一条，确保后续断言有数据
+    const created = await (
+      await createR(json(goodDraft, admin.cookie))
+    ).json()
+
+    // 无 Cookie：列表/单个/创建/更新/删除一律 401
+    expect((await listR(new Request('http://x/api/recipes'))).status).toBe(401)
+    expect((await getR(new Request('http://x'), ctxOf(created.id))).status).toBe(401)
+    expect((await createR(json(goodDraft))).status).toBe(401)
+    expect((await putR(json(goodDraft), ctxOf(created.id))).status).toBe(401)
+    expect((await delR(new Request('http://x'), ctxOf(created.id))).status).toBe(401)
+    // 401 拦截在前：未消费 body 的请求带着非法 body 也先被守卫拦下（守卫是 handler 首行）
+    expect((await createR(new Request('http://x', { method: 'POST', body: '{oops' }))).status).toBe(401)
+
+    // 带合法会话：列表 200，能取到既有菜谱
+    const ok = await listR(new Request('http://x/api/recipes', { headers: { cookie: admin.cookie } }))
+    expect(ok.status).toBe(200)
+    const body = await ok.json()
+    expect(body.recipes).toHaveLength(1)
+    expect(body.recipes[0].id).toBe(created.id)
+    // 带会话的删除也走通
+    expect((await delR(new Request('http://x', { headers: { cookie: admin.cookie } }), ctxOf(created.id))).status).toBe(204)
   })
+
+  it('跨用户隔离：他人菜谱对本用户不可见（列表不出现、直接访问 404）', async () => {
+    await enableMultiUser()
+    const alice = await makeSession('爱丽丝', 'member')
+    const bob = await makeSession('鲍勃', 'member')
+
+    const mine = await (await createR(json(goodDraft, alice.cookie))).json()
+
+    // 列表：爱丽丝看得到，鲍勃看不到
+    const aList = await (await listR(new Request('http://x/api/recipes', { headers: { cookie: alice.cookie } }))).json()
+    const bList = await (await listR(new Request('http://x/api/recipes', { headers: { cookie: bob.cookie } }))).json()
+    expect(aList.recipes.map((r: { id: string }) => r.id)).toEqual([mine.id])
+    expect(bList.recipes).toHaveLength(0)
+
+    // 直接访问：鲍勃 → 404（不是 403，避免探测存在性）
+    const bGet = await getR(new Request('http://x', { headers: { cookie: bob.cookie } }), ctxOf(mine.id))
+    expect(bGet.status).toBe(404)
+    // 鲍勃也不能改/删
+    const bPut = await putR(json({ ...goodDraft, name: '被改' }, bob.cookie), ctxOf(mine.id))
+    expect(bPut.status).toBe(404)
+    const bDel = await delR(new Request('http://x', { headers: { cookie: bob.cookie } }), ctxOf(mine.id))
+    expect(bDel.status).toBe(404)
+
+    // 爱丽丝自己一切正常
+    expect((await getR(new Request('http://x', { headers: { cookie: alice.cookie } }), ctxOf(mine.id))).status).toBe(200)
+  })
+
 
   it('删除保护未启用：DELETE 不带密码直接 204（默认行为不变）', async () => {
     const created = await (await createR(json(goodDraft))).json()

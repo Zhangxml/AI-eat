@@ -5,7 +5,7 @@ import { aiComplete, loadAiConfig, type ChatMessage } from '@/lib/ai-client'
 import { extractJson, NUTRITION_FORMAT_RULE } from '@/lib/ai-prompts'
 import { validateNutrition, type Nutrition } from '@/lib/recipe-types'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
-import { requireAuth } from '@/lib/auth'
+import { requireSession } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { resolveTemperature } from '@/lib/ai-temperatures'
 
@@ -73,16 +73,16 @@ function parseNutrition(text: string): Nutrition | null {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const denied = requireAuth(req)
-  if (denied) return denied
+  const auth = await requireSession(req)
+  if (!auth.ok) return auth.res
   const ip = clientIpOf(req)
   if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/nutrition', status: 413 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/nutrition', status: 413 })
     return bodyTooLarge()
   }
   const parsed = await parseInput(req)
   if (parsed.error !== undefined) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/nutrition', status: 400 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/nutrition', status: 400 })
     return Response.json({ error: parsed.error }, { status: 400 })
   }
   const input = parsed.input
@@ -91,7 +91,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     cfg = loadAiConfig()
   } catch (e) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/nutrition', status: 503 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/nutrition', status: 503 })
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
@@ -123,11 +123,11 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
   if (!nutrition) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/nutrition', status: 502 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/nutrition', status: 502 })
     const detail = lastError ? `（${lastError}）` : ''
     return Response.json({ error: `AI 输出两次均无法解析为合法营养数据${detail}` }, { status: 502 })
   }
 
-  await appendAccessLog({ ip, method: 'POST', path: '/api/ai/nutrition', status: 200 })
+  await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/nutrition', status: 200 })
   return Response.json({ nutrition })
 }

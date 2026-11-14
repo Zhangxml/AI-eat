@@ -5,6 +5,7 @@ import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import { GET } from './route'
 import { appendAccessLog, clientIpOf, readAccessLogs } from '@/lib/access-log'
+import { enableMultiUser, makeSession } from '@/lib/test-helpers'
 
 describe('访问日志', () => {
   let dir: string
@@ -85,13 +86,19 @@ describe('访问日志', () => {
     expect(((await again.json()) as { logs: unknown[] }).logs).toHaveLength(1)
   })
 
-  it('启用 PASSWORD 后未带会话 → 401', async () => {
-    process.env.PASSWORD = 'pw-test'
-    try {
-      const res = await GET(new Request('http://x/api/access-logs'))
-      expect(res.status).toBe(401)
-    } finally {
-      delete process.env.PASSWORD
-    }
+  it('多用户模式下：无会话 → 401；member → 403；admin → 200', async () => {
+    const admin = await enableMultiUser()
+    const member = await makeSession('普通成员', 'member')
+
+    // 无会话：401
+    expect((await GET(new Request('http://x/api/access-logs'))).status).toBe(401)
+    // 普通成员：403（访问记录是全局审计，仅管理员可见）
+    expect(
+      (await GET(new Request('http://x/api/access-logs', { headers: { cookie: member.cookie } }))).status,
+    ).toBe(403)
+    // 管理员：200
+    expect(
+      (await GET(new Request('http://x/api/access-logs', { headers: { cookie: admin.cookie } }))).status,
+    ).toBe(200)
   })
 })

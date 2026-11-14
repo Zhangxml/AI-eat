@@ -15,6 +15,8 @@ interface AccessLogEntry {
   method: string
   path: string
   status: number
+  /** 操作者（旧记录无此字段） */
+  user?: string
 }
 
 // 每页条数：50 条/页，200 条上限即最多 4 页
@@ -137,9 +139,10 @@ export default function AccessLogsPage() {
                   </span>
                   <span className={`shrink-0 font-mono text-sm ${statusColor(log.status)}`}>{log.status}</span>
                 </div>
-                {/* 第二行：时间 + IP */}
+                {/* 第二行：时间 + 操作者 + IP（旧记录没有 user，显示「—」） */}
                 <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-xs text-neutral-500 dark:text-neutral-400">
                   <span>{formatTime(log.time)}</span>
+                  <span className="break-words">操作者: {log.user ?? '—'}</span>
                   <span className="break-all">IP: {log.ip}</span>
                 </div>
               </li>

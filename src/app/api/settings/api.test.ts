@@ -4,14 +4,19 @@ import path from 'node:path'
 import os from 'node:os'
 import { promises as fs } from 'node:fs'
 import { GET, PATCH } from './route'
-import { issueToken } from '@/lib/auth'
+import { enableMultiUser, makeSession } from '@/lib/test-helpers'
 
-const patchReq = (body: unknown) =>
+const patchReq = (body: unknown, cookie?: string) =>
   new Request('http://x/api/settings', {
     method: 'PATCH',
     body: JSON.stringify(body),
-    headers: { 'content-type': 'application/json' },
+    headers: cookie
+      ? { 'content-type': 'application/json', cookie }
+      : { 'content-type': 'application/json' },
   })
+
+const getReq = (cookie?: string) =>
+  new Request('http://x/api/settings', { headers: cookie ? { cookie } : {} })
 
 describe('/api/settings', () => {
   let dir: string
@@ -61,20 +66,23 @@ describe('/api/settings', () => {
     expect(await res.json()).toEqual({ version: 1, style: 'creative' })
   })
 
-  it('启用 PASSWORD 后无会话 → GET/PATCH 均 401', async () => {
-    process.env.PASSWORD = 'pw'
-    try {
-      expect((await GET(new Request('http://x/api/settings'))).status).toBe(401)
-      expect((await PATCH(patchReq({ style: 'creative' }))).status).toBe(401)
-      // 带合法会话可正常访问
-      const token = issueToken()
-      const ok = await GET(
-        new Request('http://x/api/settings', { headers: { cookie: `ai-eat-session=${token}` } }),
-      )
-      expect(ok.status).toBe(200)
-    } finally {
-      delete process.env.PASSWORD
-    }
+  it('启用多用户后无会话 → GET/PATCH 均 401；带会话正常', async () => {
+    const admin = await enableMultiUser()
+    expect((await GET(getReq())).status).toBe(401)
+    expect((await PATCH(patchReq({ style: 'creative' }))).status).toBe(401)
+    expect((await GET(getReq(admin.cookie))).status).toBe(200)
+    expect((await PATCH(patchReq({ style: 'creative' }, admin.cookie))).status).toBe(200)
+  })
+
+  it('推荐风格按用户隔离：A 改 creative 不影响 B', async () => {
+    await enableMultiUser()
+    const a = await makeSession('甲', 'member')
+    const b = await makeSession('乙', 'member')
+    expect((await PATCH(patchReq({ style: 'creative' }, a.cookie))).status).toBe(200)
+    const aBody = await (await GET(getReq(a.cookie))).json()
+    const bBody = await (await GET(getReq(b.cookie))).json()
+    expect(aBody).toEqual({ version: 1, style: 'creative' })
+    expect(bBody).toEqual({ version: 1, style: 'home' })
   })
 
   it('写盘失败（目录只读）→ 500 中文错误', async () => {

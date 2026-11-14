@@ -10,7 +10,7 @@ vi.mock('@/lib/ai-client', async importOriginal => {
 })
 
 import { POST } from './route'
-import { issueToken } from '@/lib/auth'
+import { enableMultiUser } from '@/lib/test-helpers'
 import { aiComplete } from '@/lib/ai-client'
 
 const aiCompleteMock = vi.mocked(aiComplete)
@@ -27,20 +27,17 @@ const ENV_KEYS = ['AI_BASE_URL', 'AI_API_KEY', 'AI_MODEL', 'AI_EAT_DATA_DIR', 'A
 describe('POST /api/ai/nutrition', () => {
 
   it('启用鉴权后未带会话 → 401（守卫在 handler 首行，未触 AI 调用）', async () => {
-    process.env.PASSWORD = 'test-pw'
-    try {
+    const admin = await enableMultiUser()
+    {
       const denied = await POST(jsonReq({ recipe: { name: '番茄炒蛋', ingredients: [{ name: '番茄', amount: '2个' }], servings: 2 } }))
       expect(denied.status).toBe(401)
       // 带合法会话则放行（继续走到参数/AI 环节，不再被守卫拦）
-      const token = issueToken()
       const req2 = new Request('http://x/api/ai/nutrition', {
         method: 'POST',
         body: JSON.stringify({}),
-        headers: { 'content-type': 'application/json', cookie: `ai-eat-session=${token}` },
+        headers: { 'content-type': 'application/json', cookie: admin.cookie },
       })
       expect((await POST(req2)).status).not.toBe(401)
-    } finally {
-      delete process.env.PASSWORD
     }
   })
   let dir: string

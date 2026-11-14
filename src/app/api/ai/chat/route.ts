@@ -18,7 +18,8 @@ import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
 import { startSseHeartbeat } from '@/lib/sse-heartbeat'
 import { checkBodySize, BODY_LIMIT_BYTES } from '@/lib/body-limit'
-import { requireAuth } from '@/lib/auth'
+import { requireSession } from '@/lib/auth'
+import { recipesDirFor } from '@/lib/user-paths'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
 // 重试提示（与 Task 10 同款提示词模式；测试断言依赖此文案）
@@ -203,26 +204,27 @@ function processUpstreamChunk(
 // POST handler：参数校验 → 400；AI 配置 → 503；上游请求失败 → 502；正常 → SSE 流
 // 档位由全局设置（data/settings.json）决定：home=湖北家常（默认）| creative=外省中式创意，影响人设句与灵感池
 export async function POST(req: Request): Promise<Response> {
-  const denied = requireAuth(req)
-  if (denied) return denied
+  const auth = await requireSession(req)
+  if (!auth.ok) return auth.res
+  const dir = recipesDirFor(auth.user.id)
   const ip = clientIpOf(req)
   // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
   if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 413 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 413 })
     return Response.json({ error: '请求体过大' }, { status: 413 })
   }
   const messages = await parseInput(req)
   if (!messages) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 400 })
     return Response.json({ error: '参数缺失或非法：messages 须为非空的消息数组' }, { status: 400 })
   }
   // 推荐风格档位：由全局设置（data/settings.json）决定，服务端单一事实来源。
   // 前端不再传参——即便有人直接调接口，行为也与设置页一致。
-  const style: InspirationStyle = (await readSettings()).style
+  const style: InspirationStyle = (await readSettings(auth.user.id)).style
   // 输入规模上限（审计修复 #4）：条数 ≤50、单条 content ≤8000 字符、总字符 ≤50000——
   // 防御超大对话历史把上游 token 消耗与内存放大（400 中文文案与既有 400 形态一致）
   if (messages.length > CHAT_MAX_MESSAGES) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 400 })
     return Response.json(
       { error: `消息条数过多：最多 ${CHAT_MAX_MESSAGES} 条，当前 ${messages.length} 条` },
       { status: 400 },
@@ -231,7 +233,7 @@ export async function POST(req: Request): Promise<Response> {
   let totalChars = 0
   for (const m of messages) {
     if (m.content.length > CHAT_MAX_CONTENT_CHARS) {
-      await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
+      await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 400 })
       return Response.json(
         { error: `单条消息过长：最多 ${CHAT_MAX_CONTENT_CHARS} 字符` },
         { status: 400 },
@@ -240,7 +242,7 @@ export async function POST(req: Request): Promise<Response> {
     totalChars += m.content.length
   }
   if (totalChars > CHAT_MAX_TOTAL_CHARS) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 400 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 400 })
     return Response.json(
       { error: `消息总字符过多：最多 ${CHAT_MAX_TOTAL_CHARS} 字符` },
       { status: 400 },
@@ -252,16 +254,16 @@ export async function POST(req: Request): Promise<Response> {
   try {
     cfg = loadAiConfig()
   } catch (e) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 503 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 503 })
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
   // 菜谱库读取：非 ENOENT 故障（权限等）→ 500 中文（审计修复 #8）
   let recipes: Recipe[]
   try {
-    recipes = (await listRecipes()).recipes
+    recipes = (await listRecipes(dir)).recipes
   } catch {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 500 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 500 })
     return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
   }
   // 系统消息 = 人设（含风格档位）+ 库摘要（仅防重复参考）+ 输出规则 + 本次灵感方向；
@@ -287,14 +289,14 @@ export async function POST(req: Request): Promise<Response> {
     upstream = await aiChatStream(cfg, sent, aiOptions)
   } catch (e) {
     // 上游非 2xx（aiChatStream throw）：此时尚未发出任何 SSE 字节，可直接回 JSON 错误（与 Task 10 的 502 一致）
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 502 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 502 })
     return Response.json(
       { error: e instanceof Error ? e.message : 'AI 上游请求失败' },
       { status: 502 },
     )
   }
   if (!upstream.body) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 502 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 502 })
     return Response.json({ error: 'AI 上游请求失败：响应无内容' }, { status: 502 })
   }
 
@@ -380,7 +382,7 @@ export async function POST(req: Request): Promise<Response> {
                 emit(sseEvent('error', { error: 'AI 输出两次均无法解析为合法推荐清单' }))
               }
               // 访问日志（方案 A）：清单生成 200 / 解析失败 502
-              await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: menu ? 200 : 502 })
+              await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: menu ? 200 : 502 })
             } else {
               // <recipe>：完整菜谱（原有路径）
               let recipe = extractRecipeJson(pending.content)
@@ -397,11 +399,11 @@ export async function POST(req: Request): Promise<Response> {
                 emit(sseEvent('error', { error: 'AI 输出两次均无法解析为合法菜谱' }))
               }
               // 访问日志：菜谱生成 200 / 解析失败 502
-              await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: recipe ? 200 : 502 })
+              await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: recipe ? 200 : 502 })
             }
           } else {
             // 纯对话（无结构化输出）：正常回答完成
-            await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 200 })
+            await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 200 })
           }
           emit(sseEvent('done', {}))
         }
@@ -424,7 +426,7 @@ export async function POST(req: Request): Promise<Response> {
           )
           emit(sseEvent('done', {}))
           // 访问日志（审计 #26）：仅真实上游中断记 502；客户端主动关闭不记
-          await appendAccessLog({ ip, method: 'POST', path: '/api/ai/chat', status: 502 })
+          await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 502 })
         }
         stopHeartbeat?.()
         try {

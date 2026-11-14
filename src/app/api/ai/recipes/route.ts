@@ -9,7 +9,8 @@ import { listRecipes } from '@/lib/recipe-store'
 import { readSettings } from '@/lib/settings-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
-import { requireAuth } from '@/lib/auth'
+import { requireSession } from '@/lib/auth'
+import { recipesDirFor } from '@/lib/user-paths'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { resolveTemperature } from '@/lib/ai-temperatures'
 import { pickInspiration, type InspirationStyle } from '@/lib/inspiration'
@@ -99,13 +100,14 @@ function buildUserMessage(input: {
 // POST handler：参数校验 → 400；AI 配置 → 503；生成+解析（失败重试一次）→ 200/502
 // 访问日志（方案 A）：AI 调用是成本敏感操作，成功失败都记录（400/502/503/200）
 export async function POST(req: Request): Promise<Response> {
-  const denied = requireAuth(req)
-  if (denied) return denied
+  const auth = await requireSession(req)
+  if (!auth.ok) return auth.res
+  const dir = recipesDirFor(auth.user.id)
   // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
   if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   const input = await parseInput(req)
   if (!input) {
-    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 400 })
+    await appendAccessLog({ ip: clientIpOf(req), user: auth.user.name, method: 'POST', path: '/api/ai/recipes', status: 400 })
     return Response.json(
       {
         error: `参数缺失或非法：ingredients（≤${MAX_LIST_ITEMS} 项、每项 ≤${MAX_TEXT_CHARS} 字符）与 dish（≤${MAX_TEXT_CHARS} 字符）至少提供一个，servings 须为 1~${MAX_SERVINGS} 的整数`,
@@ -115,14 +117,14 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // 推荐风格档位：全局设置（data/settings.json）决定，前端不再传参
-  const style: InspirationStyle = (await readSettings()).style
+  const style: InspirationStyle = (await readSettings(auth.user.id)).style
 
   // AI 未配置：loadAiConfig throw 中文错误 → 503（env 真实路径，测试只 mock aiComplete）
   let cfg
   try {
     cfg = loadAiConfig()
   } catch (e) {
-    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 503 })
+    await appendAccessLog({ ip: clientIpOf(req), user: auth.user.name, method: 'POST', path: '/api/ai/recipes', status: 503 })
     return Response.json({ error: e instanceof Error ? e.message : 'AI 配置缺失' }, { status: 503 })
   }
 
@@ -130,9 +132,9 @@ export async function POST(req: Request): Promise<Response> {
   // 菜谱库读取失败（权限等）→ 500 中文（审计修复 #8）
   let recipes: Recipe[]
   try {
-    recipes = (await listRecipes()).recipes
+    recipes = (await listRecipes(dir)).recipes
   } catch {
-    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 500 })
+    await appendAccessLog({ ip: clientIpOf(req), user: auth.user.name, method: 'POST', path: '/api/ai/recipes', status: 500 })
     return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
   }
   const system: ChatMessage = {
@@ -165,7 +167,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!recipe) {
     // 502 文案带首轮错误详情，便于排查上游异常
     const detail = firstError ? `（${firstError}）` : ''
-    await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 502 })
+    await appendAccessLog({ ip: clientIpOf(req), user: auth.user.name, method: 'POST', path: '/api/ai/recipes', status: 502 })
     return Response.json({ error: `AI 输出两次均无法解析为合法菜谱${detail}` }, { status: 502 })
   }
 
@@ -178,7 +180,7 @@ export async function POST(req: Request): Promise<Response> {
   recipe.source = 'ai'
 
   // 访问日志：生成成功
-  await appendAccessLog({ ip: clientIpOf(req), method: 'POST', path: '/api/ai/recipes', status: 200 })
+  await appendAccessLog({ ip: clientIpOf(req), user: auth.user.name, method: 'POST', path: '/api/ai/recipes', status: 200 })
 
   // 不写盘：直接返回 recipe，入库由前端 POST /api/recipes 完成
   return Response.json({ recipe })

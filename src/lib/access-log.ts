@@ -18,6 +18,8 @@ export interface AccessLogEntry {
   path: string
   /** 响应状态码 */
   status: number
+  /** 操作者用户名（多用户后新增；旧记录没有该字段，读取端必须容忍） */
+  user?: string
 }
 
 // 日志文件路径：data/logs/access.jsonl（AI_EAT_DATA_DIR 指向 data/recipes，

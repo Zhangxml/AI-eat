@@ -15,6 +15,22 @@ import { createTapReveal } from '@/lib/tap-reveal'
 
 // GET /api/config 响应中【本页实际读取的字段子集】（绝不含 apiKey）。
 // 服务端还会返回 baseUrl —— 本页不展示也不声明，多出的字段在此处被忽略，不是漏写
+// GET /api/auth 契约：{ needsSetup, enabled, currentUser? }
+interface MeResponse {
+  needsSetup: boolean
+  enabled: boolean
+  currentUser?: { name: string; role: 'admin' | 'member' }
+}
+
+// GET /api/users 契约（管理员）：绝不含 passwordHash
+interface UserRow {
+  id: string
+  name: string
+  role: 'admin' | 'member'
+  disabled: boolean
+  createdAt: string
+}
+
 interface ConfigResponse {
   aiConfigured: boolean
   model: string | null
@@ -48,6 +64,14 @@ export default function SettingsPage() {
   const [error, setError] = useState('')
   // 导出进行中状态
   const [exporting, setExporting] = useState(false)
+  // 当前登录账号（设置页顶部展示 + 决定是否显示「用户管理」）
+  const [me, setMe] = useState<NonNullable<MeResponse['currentUser']> | null>(null)
+  // 用户管理（仅管理员）：列表 / 新建表单 / 行内错误
+  const [users, setUsers] = useState<UserRow[]>([])
+  const [newUserName, setNewUserName] = useState('')
+  const [newUserPassword, setNewUserPassword] = useState('')
+  const [userBusy, setUserBusy] = useState(false)
+  const [userError, setUserError] = useState('')
   // 访问记录入口是否可见：默认隐藏，连点「访问鉴权」5 次后显示。
   // 只用组件内存态——刷新页面即回到隐藏（需求明确要求「刷新后隐藏」）
   const [accessLogsVisible, setAccessLogsVisible] = useState(false)
@@ -144,14 +168,137 @@ export default function SettingsPage() {
     [savingStyle, settings],
   )
 
+  // 当前账号：登录页/守卫之外的唯一来源；失败则按「未登录」处理（守卫会把请求拦成 401）
+  const loadMe = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/auth')
+      if (!res.ok) return
+      const data = (await res.json()) as MeResponse
+      if (mountedRef.current) setMe(data.currentUser ?? null)
+    } catch {
+      // 忽略：不影响其它分组
+    }
+  }, [])
+
+  // 用户列表（仅管理员调用；member 会拿到 403，静默忽略）
+  const loadUsers = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/users')
+      if (!res.ok) return
+      const data = (await res.json()) as { users: UserRow[] }
+      if (mountedRef.current) setUsers(data.users)
+    } catch {
+      // 忽略
+    }
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
     void loadConfig()
     void loadSettings()
+    void loadMe()
     return () => {
       mountedRef.current = false
     }
-  }, [loadConfig, loadSettings])
+  }, [loadConfig, loadSettings, loadMe])
+
+  // 管理员登录后才拉用户列表（member 不请求，避免无谓的 403）
+  useEffect(() => {
+    if (me?.role === 'admin') void loadUsers()
+  }, [me, loadUsers])
+
+  // 退出登录：清 Cookie 后整页跳登录页
+  const handleLogout = useCallback(async () => {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' })
+    } catch {
+      // 即使请求失败也回登录页（会话已无意义）
+    }
+    window.location.href = '/login'
+  }, [])
+
+  // 新建用户
+  const handleCreateUser = useCallback(async () => {
+    if (userBusy) return
+    const name = newUserName.trim()
+    if (name === '' || newUserPassword.length < 4) {
+      setUserError('用户名不能为空，密码至少 4 位')
+      return
+    }
+    setUserBusy(true)
+    setUserError('')
+    try {
+      const res = await apiFetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, password: newUserPassword }),
+      })
+      if (!res.ok) {
+        let msg = '新建失败，请重试'
+        try {
+          const data = (await res.json()) as { error?: string }
+          if (typeof data?.error === 'string' && data.error !== '') msg = data.error
+        } catch {
+          // 保留默认
+        }
+        setUserError(msg)
+        return
+      }
+      setNewUserName('')
+      setNewUserPassword('')
+      await loadUsers()
+    } catch {
+      setUserError('新建失败，网络异常')
+    } finally {
+      setUserBusy(false)
+    }
+  }, [userBusy, newUserName, newUserPassword, loadUsers])
+
+  // 禁用/启用、删除
+  const patchUser = useCallback(
+    async (id: string, patch: { disabled?: boolean }) => {
+      setUserError('')
+      try {
+        const res = await apiFetch(`/api/users/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        })
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string }
+          setUserError(data?.error ?? '操作失败')
+          return
+        }
+        await loadUsers()
+      } catch {
+        setUserError('操作失败，网络异常')
+      }
+    },
+    [loadUsers],
+  )
+
+  const deleteUserRow = useCallback(
+    async (u: UserRow) => {
+      if (!window.confirm(`删除用户「${u.name}」？其菜谱库将一并删除，且不可恢复。`)) return
+      setUserError('')
+      try {
+        const res = await apiFetch(`/api/users/${u.id}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm: u.name }),
+        })
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string }
+          setUserError(data?.error ?? '删除失败')
+          return
+        }
+        await loadUsers()
+      } catch {
+        setUserError('删除失败，网络异常')
+      }
+    },
+    [loadUsers],
+  )
 
   // 导出：GET /api/backup → blob → 创建 <a download> 触发浏览器下载
   // 文件名取 Content-Disposition 里的 filename（与服务端 YYYYMMDD 保持一致），解析失败回退本地日期
@@ -237,6 +384,27 @@ export default function SettingsPage() {
   return (
     <main className="mx-auto max-w-3xl px-4 py-4">
       <h1 className="mb-4 text-lg font-medium text-neutral-900 dark:text-neutral-100">设置</h1>
+
+      {/* 当前账号：名字 + 角色 + 退出登录。角色决定下方是否出现「用户管理」 */}
+      {me !== null && (
+        <section className="mb-6 flex items-center justify-between gap-2 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+              {me.name}
+            </p>
+            <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+              {me.role === 'admin' ? '管理员（可管理账号与查看访问记录）' : '普通成员'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            className="inline-flex min-h-[32px] shrink-0 items-center rounded-md border border-neutral-300 px-3 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800"
+          >
+            退出登录
+          </button>
+        </section>
+      )}
 
       {/* 推荐风格：全局偏好（存服务端 data/settings.json），影响问问AI 与买什么两个模块 */}
       <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
@@ -390,7 +558,7 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* 鉴权状态展示：PASSWORD 是否启用。与删除保护卡构成一组（分组卡片样式）：
+      {/* 鉴权状态展示：是否已启用多用户（有 users.json）。与删除保护卡构成一组（分组卡片样式）：
           上卡只留顶部圆角、下卡只留底部圆角，两卡贴合无间隔，组间与其他卡片一致（mb-6）。
           整卡可点：连点 5 次显示「访问记录」入口（默认隐藏；刷新即回隐藏）。
           刻意不给任何进度提示，否则连点几次就暴露了 */}
@@ -424,7 +592,7 @@ export default function SettingsPage() {
               ? '状态加载失败'
               : '加载中…'
             : config.authEnabled
-              ? '已启用（需口令登录后访问）'
+              ? '已启用（需用户名 + 密码登录）'
               : '未启用（局域网信任边界，无需登录）'}
         </p>
       </section>
@@ -449,11 +617,95 @@ export default function SettingsPage() {
         </p>
       </section>
 
-      {/* 访问记录入口：默认隐藏；在「访问鉴权」卡连点 5 次后显示（内存态，刷新即回隐藏）。
+      {/* 用户管理（仅管理员）：新建 / 禁用 / 删除。删除会连带清空该用户菜谱库 */}
+      {me?.role === 'admin' && (
+        <section className="mb-6 rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+          <h2 className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-100">用户管理</h2>
+
+          <ul className="mb-3 flex flex-col gap-2">
+            {users.map(u => (
+              <li
+                key={u.id}
+                className="flex items-center justify-between gap-2 rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-800"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-neutral-900 dark:text-neutral-100">
+                    {u.name}
+                    {u.role === 'admin' && (
+                      <span className="ml-2 rounded-md bg-neutral-900 px-1.5 py-0.5 text-xs text-white dark:bg-neutral-100 dark:text-neutral-900">
+                        管理员
+                      </span>
+                    )}
+                    {u.disabled && (
+                      <span className="ml-2 rounded-md bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                        已禁用
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void patchUser(u.id, { disabled: !u.disabled })}
+                    aria-label={`${u.disabled ? '启用' : '禁用'}用户：${u.name}`}
+                    className="inline-flex min-h-[32px] items-center rounded-md border border-neutral-300 px-2.5 text-sm text-neutral-600 transition-colors active:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:active:bg-neutral-800"
+                  >
+                    {u.disabled ? '启用' : '禁用'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteUserRow(u)}
+                    aria-label={`删除用户：${u.name}`}
+                    className="inline-flex min-h-[32px] items-center rounded-md border border-red-200 px-2.5 text-sm text-red-600 transition-colors active:bg-red-50 dark:border-red-900 dark:text-red-400 dark:active:bg-red-950"
+                  >
+                    删除
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          <div className="flex flex-col gap-2">
+            <input
+              type="text"
+              value={newUserName}
+              onChange={e => setNewUserName(e.target.value)}
+              placeholder="新用户名，例如：妈妈"
+              aria-label="新用户名"
+              className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
+            />
+            <input
+              type="password"
+              value={newUserPassword}
+              onChange={e => setNewUserPassword(e.target.value)}
+              placeholder="初始密码（至少 4 位）"
+              aria-label="新用户初始密码"
+              autoComplete="new-password"
+              className="min-h-[44px] w-full rounded-lg border border-neutral-300 bg-transparent px-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900 dark:border-neutral-700 dark:text-neutral-100 dark:focus:border-neutral-100"
+            />
+            <button
+              type="button"
+              onClick={() => void handleCreateUser()}
+              disabled={userBusy}
+              className="min-h-[44px] w-full rounded-lg bg-neutral-900 py-3 text-base font-medium text-white transition-colors active:bg-neutral-700 disabled:opacity-60 dark:bg-neutral-100 dark:text-neutral-900 dark:active:bg-neutral-300"
+            >
+              {userBusy ? '新建中…' : '新建用户'}
+            </button>
+            {userError !== '' && (
+              <p role="alert" className="break-words text-sm text-red-600 dark:text-red-400">
+                {userError}
+              </p>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* 访问记录入口：仅管理员可见（服务端也强制 403），且仍需连点 5 次才显示。
+          两层理由：角色控制是权限边界；连点隐藏是「别让旁人一眼看到」。
           显示时作为状态组组尾卡（底部圆角），与上两卡贴合无间隔。
           replace：把当前 /settings 历史项替换为 /access-logs，而不是新增一条——
           否则用过一次后，不知情的人按「后退」就能直接落到访问记录页，绕开连点手势 */}
-      {accessLogsVisible && (
+      {accessLogsVisible && me?.role === 'admin' && (
         <Link
           href="/access-logs"
           replace

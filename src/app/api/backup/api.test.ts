@@ -7,6 +7,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { GET, POST } from './route'
 import { getRecipe, putRecipe } from '@/lib/recipe-store'
+import { enableMultiUser, makeSession } from '@/lib/test-helpers'
 import type { Recipe } from '@/lib/recipe-types'
 
 // 构造 GET 请求（守卫只读 Cookie 头；PASSWORD 未启用时不带 Cookie 亦可）
@@ -51,16 +52,46 @@ const rawReq = (text: string) =>
 
 describe('备份接口 /api/backup', () => {
 
-  it('启用鉴权后未带会话 → GET/POST 均 401', async () => {
-    process.env.PASSWORD = 'test-pw'
-    try {
-      expect((await GET(new Request('http://x/api/backup'))).status).toBe(401)
-      expect(
-        (await POST(new Request('http://x/api/backup', { method: 'POST', body: JSON.stringify({ recipes: [] }), headers: { 'content-type': 'application/json' } }))).status,
-      ).toBe(401)
-    } finally {
-      delete process.env.PASSWORD
+  it('多用户模式下未带会话 → GET/POST 均 401', async () => {
+    await enableMultiUser()
+    expect((await GET(new Request('http://x/api/backup'))).status).toBe(401)
+    expect(
+      (await POST(new Request('http://x/api/backup', { method: 'POST', body: JSON.stringify({ recipes: [] }), headers: { 'content-type': 'application/json' } }))).status,
+    ).toBe(401)
+  })
+
+  it('导出按角色分流：member 只有 recipes；admin 拿到 users 分组', async () => {
+    const admin = await enableMultiUser()
+    const member = await makeSession('成员甲', 'member')
+
+    // 成员甲导入一条到自己的库
+    const importRes = await POST(
+      new Request('http://x/api/backup', {
+        method: 'POST',
+        body: JSON.stringify({ recipes: [baseRecipe] }),
+        headers: { 'content-type': 'application/json', cookie: member.cookie },
+      }),
+    )
+    expect(importRes.status).toBe(200)
+
+    // member 导出：只有自己的 1 条
+    const mBody = (await (await GET(new Request('http://x/api/backup', { headers: { cookie: member.cookie } }))).json()) as {
+      recipes: Recipe[]
+      users?: unknown
     }
+    expect(mBody.recipes).toHaveLength(1)
+    expect(mBody.users).toBeUndefined()
+
+    // admin 导出：users 分组，含成员甲且不计入自己的库
+    const aBody = (await (await GET(new Request('http://x/api/backup', { headers: { cookie: admin.cookie } }))).json()) as {
+      recipes: Recipe[]
+      users: { name: string; recipes: Recipe[] }[]
+    }
+    // 顶层 recipes = 管理员自己的库（使导出文件可被 POST 回灌）
+    expect(Array.isArray(aBody.recipes)).toBe(true)
+    expect(aBody.users.map(u => u.name).sort()).toEqual(['成员甲', '管理员'].sort())
+    const memberBundle = aBody.users.find(u => u.name === '成员甲')!
+    expect(memberBundle.recipes.map(r => r.id)).toEqual([baseRecipe.id])
   })
   let dir: string
 

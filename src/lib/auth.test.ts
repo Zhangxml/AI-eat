@@ -1,146 +1,128 @@
-// auth 鉴权模块单测（Task 16）：
-// - authEnabled / verifyPassword / isValidToken / requireAuth 均显式传 env 参数，不依赖 process.env
-// - issueToken 契约签名无 env 参数（密钥取 process.env.PASSWORD），本文件用快照接管并在 afterEach 恢复
+// 守卫单测：requireSession 的三种模式（未启用多用户 / 已启用且会话有效 / 无效）
+// 以及「跨用户访问必须 404」所依赖的归属判定工具
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { authEnabled, verifyPassword, issueToken, isValidToken, requireAuth } from './auth'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { LEGACY_OWNER_ID, bootstrapRequired, requireAdmin, requireSession } from './auth'
+import { issueSession, sessionCookie } from './session'
+import { createUser } from './user-store'
 
-// 测试局部 env 字面量经 unknown 中转：Next 的 global.d.ts 把 ProcessEnv.NODE_ENV 声明为必填，
-// 直接 as NodeJS.ProcessEnv 因重叠不足被 TS 拒绝（同 ai-client.test.ts 的既有处理）
-const envOf = (vars: Record<string, string>): NodeJS.ProcessEnv => vars as unknown as NodeJS.ProcessEnv
+const NOW = 1_800_000_000_000
 
-// requireAuth 的 401 响应体形状
-interface ErrorResponse {
-  error: string
-}
+describe('requireSession 守卫', () => {
+  let root: string
+  let prevEnv: Record<string, string | undefined>
 
-// 把 token 的末位字符换成同字母表里的另一个字符（保证一定变了）
-function flipLast(s: string, alt: string): string {
-  return s.slice(0, -1) + (s.endsWith(alt) ? (alt === 'A' ? 'B' : 'A') : alt)
-}
-
-describe('auth 鉴权模块', () => {
-  let envSnapshot: NodeJS.ProcessEnv
-
-  beforeEach(() => {
-    envSnapshot = { ...process.env }
-    process.env.PASSWORD = 'p'
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-auth-'))
+    prevEnv = {
+      AI_EAT_DATA_DIR: process.env.AI_EAT_DATA_DIR,
+      SESSION_SECRET: process.env.SESSION_SECRET,
+      PASSWORD: process.env.PASSWORD,
+    }
+    process.env.AI_EAT_DATA_DIR = path.join(root, 'recipes')
+    process.env.SESSION_SECRET = 'test-secret-0123456789abcdef'
+    delete process.env.PASSWORD
   })
 
-  afterEach(() => {
-    process.env = envSnapshot
+  afterEach(async () => {
+    for (const [k, v] of Object.entries(prevEnv)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    await fs.rm(root, { recursive: true, force: true })
   })
 
-  // —— authEnabled ——
-  it('authEnabled：PASSWORD 非空 true；空串/未设 false（显式 env，不碰 process.env）', () => {
-    expect(authEnabled(envOf({ PASSWORD: 'p' }))).toBe(true)
-    expect(authEnabled(envOf({ PASSWORD: '' }))).toBe(false)
-    expect(authEnabled(envOf({}))).toBe(false)
+  const reqWith = (cookie?: string) =>
+    new Request('http://x/api/recipes', { headers: cookie ? { cookie } : {} })
+
+  it('未启用多用户（无 users.json）→ 放行并返回 LEGACY_OWNER', async () => {
+    const r = await requireSession(reqWith())
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.user.id).toBe(LEGACY_OWNER_ID)
+      expect(r.user.role).toBe('admin')
+    }
   })
 
-  // —— verifyPassword ——
-  it('verifyPassword：正确口令 true；错误口令 false', () => {
-    expect(verifyPassword('p', envOf({ PASSWORD: 'p' }))).toBe(true)
-    expect(verifyPassword('wrong', envOf({ PASSWORD: 'p' }))).toBe(false)
+  it('bootstrapRequired：无用户为 true，有用户为 false', async () => {
+    expect(await bootstrapRequired()).toBe(true)
+    await createUser({ name: '爸爸', passwordHash: 'h' })
+    expect(await bootstrapRequired()).toBe(false)
   })
 
-  it('verifyPassword：长度不等时短路返回 false，不触发 timingSafeEqual 的等长断言 throw', () => {
-    expect(() => verifyPassword('short', envOf({ PASSWORD: 'a-much-longer-password' }))).not.toThrow()
-    expect(verifyPassword('short', envOf({ PASSWORD: 'a-much-longer-password' }))).toBe(false)
+  it('已启用多用户 + 无 Cookie → 401', async () => {
+    await createUser({ name: '爸爸', passwordHash: 'h' })
+    const r = await requireSession(reqWith())
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.res.status).toBe(401)
   })
 
-  it('verifyPassword：PASSWORD 未设/为空 → 一律 false（未启用即无合法口令）', () => {
-    expect(verifyPassword('', envOf({}))).toBe(false)
-    expect(verifyPassword('anything', envOf({}))).toBe(false)
+  it('已启用多用户 + 有效会话 → 返回该用户', async () => {
+    await createUser({ name: '爸爸', passwordHash: 'h' }) // 首个是 admin
+    const u = await createUser({ name: '妈妈', passwordHash: 'h' })
+    const token = await issueSession({ uid: u.id, ver: u.sessionVersion }, NOW)
+    const r = await requireSession(reqWith(`ai-eat-session=${token}`), NOW + 1000)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.user.id).toBe(u.id)
+      expect(r.user.name).toBe('妈妈')
+      expect(r.user.role).toBe('member')
+    }
   })
 
-  // —— issueToken / isValidToken ——
-  it('issueToken：payload 为 base64url、签名为 64 位小写 hex，payload 解出 { exp: now + 30天 }', () => {
-    const now = 1730000000000
-    const token = issueToken(now)
-    const [payload, sig] = token.split('.') as [string, string]
-    expect(payload).toMatch(/^[A-Za-z0-9_-]+$/)
-    expect(sig).toMatch(/^[0-9a-f]{64}$/)
-    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp: number }
-    expect(parsed.exp).toBe(now + 30 * 86400_000)
+  it('sessionVersion 不匹配（改密后）→ 401', async () => {
+    const u = await createUser({ name: '妈妈', passwordHash: 'h' })
+    const token = await issueSession({ uid: u.id, ver: u.sessionVersion }, NOW)
+    // 模拟改密：版本 +1
+    const { updateUser } = await import('./user-store')
+    await updateUser(u.id, { sessionVersion: u.sessionVersion + 1, passwordHash: 'h2' })
+    const r = await requireSession(reqWith(`ai-eat-session=${token}`), NOW + 1000)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.res.status).toBe(401)
   })
 
-  it('正确密码签发的 token 校验通过（签发与校验同密钥）', () => {
-    const token = issueToken(Date.now())
-    expect(isValidToken(token, envOf({ PASSWORD: 'p' }))).toBe(true)
+  it('用户被禁用 → 401', async () => {
+    const u = await createUser({ name: '妈妈', passwordHash: 'h' })
+    const token = await issueSession({ uid: u.id, ver: u.sessionVersion }, NOW)
+    const { updateUser } = await import('./user-store')
+    await updateUser(u.id, { disabled: true })
+    const r = await requireSession(reqWith(`ai-eat-session=${token}`), NOW + 1000)
+    expect(r.ok).toBe(false)
   })
 
-  it('过期 token 拒绝（exp ≤ 校验时刻即失效，边界含等号）', () => {
-    const now = Date.now()
-    expect(isValidToken(issueToken(now - 31 * 86400_000), envOf({ PASSWORD: 'p' }))).toBe(false)
-    // 边界：校验时刻恰好等于 exp → 失效；早 1 毫秒 → 有效
-    const token = issueToken(now)
-    const exp = now + 30 * 86400_000
-    expect(isValidToken(token, envOf({ PASSWORD: 'p' }), exp)).toBe(false)
-    expect(isValidToken(token, envOf({ PASSWORD: 'p' }), exp - 1)).toBe(true)
+  it('用户被删除 → 401（需保留另一个用户，否则禁止删除）', async () => {
+    await createUser({ name: '爸爸', passwordHash: 'h' })
+    const u = await createUser({ name: '妈妈', passwordHash: 'h' })
+    const token = await issueSession({ uid: u.id, ver: u.sessionVersion }, NOW)
+    const { deleteUser } = await import('./user-store')
+    await deleteUser(u.id)
+    const r = await requireSession(reqWith(`ai-eat-session=${token}`), NOW + 1000)
+    expect(r.ok).toBe(false)
   })
 
-  it('篡改 token 拒绝：payload 或签名任一字符变动即 false', () => {
-    const token = issueToken(Date.now())
-    const [payload, sig] = token.split('.') as [string, string]
-    const badPayload = `${flipLast(payload, 'A')}.${sig}`
-    const badSig = `${payload}.${flipLast(sig, 'a')}`
-    expect(isValidToken(badPayload, envOf({ PASSWORD: 'p' }))).toBe(false)
-    expect(isValidToken(badSig, envOf({ PASSWORD: 'p' }))).toBe(false)
+  it('requireAdmin：member → 403，admin → 放行', async () => {
+    const admin = await createUser({ name: '爸爸', passwordHash: 'h' })
+    const member = await createUser({ name: '妈妈', passwordHash: 'h' })
+    const adminTok = await issueSession({ uid: admin.id, ver: 1 }, NOW)
+    const memberTok = await issueSession({ uid: member.id, ver: 1 }, NOW)
+
+    const okAdmin = await requireAdmin(reqWith(`ai-eat-session=${adminTok}`), NOW + 1000)
+    expect(okAdmin.ok).toBe(true)
+
+    const denied = await requireAdmin(reqWith(`ai-eat-session=${memberTok}`), NOW + 1000)
+    expect(denied.ok).toBe(false)
+    if (!denied.ok) expect(denied.res.status).toBe(403)
   })
 
-  it('换密钥签发的 token 校验失败（HMAC 密钥随 PASSWORD 变化）', () => {
-    const token = issueToken(Date.now())
-    expect(isValidToken(token, envOf({ PASSWORD: 'other-secret' }))).toBe(false)
+  it('未启用多用户时 requireAdmin 也放行（兼容旧模式）', async () => {
+    const r = await requireAdmin(reqWith())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.user.id).toBe(LEGACY_OWNER_ID)
   })
 
-  it('垃圾 token 拒绝：空串/无签名段/多余段/纯乱码均 false 且不 throw', () => {
-    expect(() => isValidToken('', envOf({ PASSWORD: 'p' }))).not.toThrow()
-    expect(isValidToken('', envOf({ PASSWORD: 'p' }))).toBe(false)
-    expect(isValidToken('noseparator', envOf({ PASSWORD: 'p' }))).toBe(false)
-    expect(isValidToken('a.b.c', envOf({ PASSWORD: 'p' }))).toBe(false)
-    expect(isValidToken('!@#.zz', envOf({ PASSWORD: 'p' }))).toBe(false)
-  })
-
-  it('PASSWORD 未设时 isValidToken 一律 false（无密钥即无法验签）', () => {
-    expect(isValidToken('x.y', envOf({}))).toBe(false)
-  })
-
-  // —— requireAuth ——
-  it('未设置 PASSWORD 时 requireAuth 放行（返回 null）', () => {
-    expect(requireAuth(new Request('http://x'), envOf({}))).toBeNull()
-  })
-
-  it('启用后无 Cookie 返回 401 + { error: 请先登录 }', async () => {
-    const denied = requireAuth(new Request('http://x'), envOf({ PASSWORD: 'p' }))
-    expect(denied?.status).toBe(401)
-    expect(((await denied?.json()) as ErrorResponse).error).toBe('请先登录')
-  })
-
-  it('启用后带合法会话 Cookie 放行；与其他 cookie 共存也能解析', () => {
-    const token = issueToken(Date.now())
-    const ok = requireAuth(
-      new Request('http://x', { headers: { cookie: `other=1; ai-eat-session=${token}` } }),
-      envOf({ PASSWORD: 'p' }),
-    )
-    expect(ok).toBeNull()
-  })
-
-  it('启用后带篡改/过期/空值会话 Cookie → 401', () => {
-    // 过期 token
-    const stale = issueToken(Date.now() - 31 * 86400_000)
-    expect(
-      requireAuth(new Request('http://x', { headers: { cookie: `ai-eat-session=${stale}` } }), envOf({ PASSWORD: 'p' }))?.status,
-    ).toBe(401)
-    // 篡改 payload 的 token
-    const token = issueToken(Date.now())
-    const [payload, sig] = token.split('.') as [string, string]
-    const bad = `${flipLast(payload, 'A')}.${sig}`
-    expect(
-      requireAuth(new Request('http://x', { headers: { cookie: `ai-eat-session=${bad}` } }), envOf({ PASSWORD: 'p' }))?.status,
-    ).toBe(401)
-    // 空值 cookie
-    expect(
-      requireAuth(new Request('http://x', { headers: { cookie: 'ai-eat-session=' } }), envOf({ PASSWORD: 'p' }))?.status,
-    ).toBe(401)
+  it('sessionCookie 仍保留（登录下发用）', () => {
+    expect(sessionCookie('t', null)).toContain('HttpOnly')
   })
 })

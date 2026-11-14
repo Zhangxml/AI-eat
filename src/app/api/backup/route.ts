@@ -13,7 +13,9 @@ import { listRecipes, getRecipe, putRecipe } from '@/lib/recipe-store'
 import { validateRecipe } from '@/lib/recipe-types'
 import type { Recipe } from '@/lib/recipe-types'
 import { checkBodySize, bodyTooLarge, BACKUP_BODY_LIMIT_BYTES } from '@/lib/body-limit'
-import { requireAuth } from '@/lib/auth'
+import { requireSession } from '@/lib/auth'
+import { recipesDirFor } from '@/lib/user-paths'
+import { listUsers } from '@/lib/user-store'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
 // 备份导入条数上限（审计修复 #4）：防御超大备份拖垮逐条导入循环
@@ -34,17 +36,56 @@ function backupDateString(now: Date): string {
 }
 
 // GET /api/backup → 200 { exportedAt; recipes } + attachment 头；菜谱库读取失败 → 500 中文（审计修复 #8）
+// GET /api/backup：
+// - member / 旧模式 → 200 { exportedAt, recipes }（自己的库，与原契约一致）
+// - admin → 200 { exportedAt, users: [{ name, recipes }] }（全部用户；不含任何凭据）
+// 读取失败 → 500 中文（审计修复 #8）
 export async function GET(req: Request): Promise<Response> {
-  const denied = requireAuth(req)
-  if (denied) return denied
-  let recipes: Recipe[]
-  try {
-    recipes = (await listRecipes()).recipes
-  } catch {
-    return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
+  const auth = await requireSession(req)
+  if (!auth.ok) return auth.res
+
+  const isAdminExport = auth.user.role === 'admin' && !(auth.legacy ?? false)
+  if (!isAdminExport) {
+    let recipes: Recipe[]
+    try {
+      recipes = (await listRecipes(recipesDirFor(auth.user.id))).recipes
+    } catch {
+      return Response.json({ error: '菜谱库读取失败，请检查服务器 data 目录权限' }, { status: 500 })
+    }
+    return jsonAttachment({ exportedAt: new Date().toISOString(), recipes })
   }
-  const body = JSON.stringify({ exportedAt: new Date().toISOString(), recipes })
-  return new Response(body, {
+
+  // 管理员：导出全部用户。任一用户目录读失败不影响其余（记录哪些失败）
+  const users = await listUsers()
+  const bundles: { name: string; recipes: Recipe[] }[] = []
+  const failed: string[] = []
+  for (const u of users) {
+    try {
+      const { recipes } = await listRecipes(recipesDirFor(u.id))
+      bundles.push({ name: u.name, recipes })
+    } catch {
+      failed.push(u.name)
+    }
+  }
+  // 同时带上管理员自己的 recipes（顶层），使导出文件可直接被 POST /api/backup 回灌
+  let ownRecipes: Recipe[] = []
+  try {
+    ownRecipes = (await listRecipes(recipesDirFor(auth.user.id))).recipes
+  } catch {
+    failed.push(auth.user.name)
+  }
+  if (failed.length > 0) {
+    return Response.json(
+      { error: `部分用户菜谱库读取失败：${failed.join('、')}，请检查 data 目录权限` },
+      { status: 500 },
+    )
+  }
+  return jsonAttachment({ exportedAt: new Date().toISOString(), recipes: ownRecipes, users: bundles })
+}
+
+/** 统一附件响应头（导出文件名带日期） */
+function jsonAttachment(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
@@ -63,19 +104,19 @@ interface ItemResult {
 // 导入单条：validateRecipe（strict schema）不过 → invalid；
 // id 取不到（非法条目无 id 可报）→ 用 #<数组序号> 占位；库中已有同 id → duplicate；
 // putRecipe 对穿越 id throw（store 层白名单守卫）→ 捕获计为 invalid，不中断整体导入
-async function importOne(item: unknown, index: number): Promise<ItemResult> {
+async function importOne(item: unknown, index: number, dir: string): Promise<ItemResult> {
   const recipe: Recipe | null = validateRecipe(item)
   if (!recipe) {
     const raw = item as { id?: unknown } | null
     const rawId = typeof raw?.id === 'string' && raw.id !== '' ? raw.id : `#${index}`
     return { imported: false, skipId: rawId, reason: 'invalid' }
   }
-  const existing = await getRecipe(recipe.id)
+  const existing = await getRecipe(recipe.id, dir)
   if (existing) {
     return { imported: false, skipId: recipe.id, reason: 'duplicate' }
   }
   try {
-    await putRecipe(recipe)
+    await putRecipe(recipe, dir)
   } catch {
     return { imported: false, skipId: recipe.id, reason: 'invalid' }
   }
@@ -85,8 +126,10 @@ async function importOne(item: unknown, index: number): Promise<ItemResult> {
 // POST /api/backup → 逐条导入 → 200 { imported; skipped; skippedIds; invalidIds } | 400 { error } | 413（超 5MB）
 // 访问日志（方案 A）：导入是批量写操作，成功/失败都记录
 export async function POST(req: Request): Promise<Response> {
-  const denied = requireAuth(req)
-  if (denied) return denied
+  const auth = await requireSession(req)
+  if (!auth.ok) return auth.res
+  // 导入永远只写自己的库（即使管理员，也不支持把备份灌进别人目录——避免误操作）
+  const dir = recipesDirFor(auth.user.id)
   const ip = clientIpOf(req)
   // body 体积前置闸门（审计修复 #4）：备份整库合法体积更大，上限放宽到 5MB
   if (!checkBodySize(req, BACKUP_BODY_LIMIT_BYTES)) return bodyTooLarge()
@@ -94,18 +137,18 @@ export async function POST(req: Request): Promise<Response> {
   try {
     body = await req.json()
   } catch {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/backup', status: 400 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/backup', status: 400 })
     return Response.json({ error: '请求体不是合法 JSON' }, { status: 400 })
   }
   // 顶层宽校验：仅 recipes 键存在且为数组，失败即整体 400（顶层结构错误）
   const parsed = backupEnvelopeSchema.safeParse(body)
   if (!parsed.success) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/backup', status: 400 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/backup', status: 400 })
     return Response.json({ error: '备份文件结构非法：缺少 recipes 数组' }, { status: 400 })
   }
   // 条数上限（审计修复 #4）：recipes 超过 5000 条整体 400 中文
   if (parsed.data.recipes.length > BACKUP_MAX_RECIPES) {
-    await appendAccessLog({ ip, method: 'POST', path: '/api/backup', status: 400 })
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/backup', status: 400 })
     return Response.json(
       { error: `备份条目过多：最多 ${BACKUP_MAX_RECIPES} 条，当前 ${parsed.data.recipes.length} 条` },
       { status: 400 },
@@ -118,7 +161,7 @@ export async function POST(req: Request): Promise<Response> {
   let imported = 0
   let skipped = 0
   for (let i = 0; i < parsed.data.recipes.length; i++) {
-    const r = await importOne(parsed.data.recipes[i], i)
+    const r = await importOne(parsed.data.recipes[i], i, dir)
     if (r.imported) {
       imported++
     } else {
@@ -128,6 +171,6 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
   // 访问日志：导入完成（imported 计数附在路径尾，一眼看出导入规模）
-  await appendAccessLog({ ip, method: 'POST', path: `/api/backup (imported=${imported})`, status: 200 })
+  await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: `/api/backup (imported=${imported})`, status: 200 })
   return Response.json({ imported, skipped, skippedIds, invalidIds })
 }

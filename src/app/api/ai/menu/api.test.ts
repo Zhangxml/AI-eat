@@ -16,7 +16,7 @@ vi.mock('@/lib/recipe-store', async importOriginal => {
 })
 
 import { POST } from './route'
-import { issueToken } from '@/lib/auth'
+import { enableMultiUser } from '@/lib/test-helpers'
 import { MENU_FORMAT_RULE } from '@/lib/ai-prompts'
 import { aiComplete } from '@/lib/ai-client'
 import { listRecipes } from '@/lib/recipe-store'
@@ -101,20 +101,17 @@ interface ErrorResponse {
 describe('POST /api/ai/menu', () => {
 
   it('启用鉴权后未带会话 → 401（守卫在 handler 首行，未触 AI 调用）', async () => {
-    process.env.PASSWORD = 'test-pw'
-    try {
+    const admin = await enableMultiUser()
+    {
       const denied = await POST(jsonReq({ people: 2 }))
       expect(denied.status).toBe(401)
       // 带合法会话则放行（继续走到参数/AI 环节，不再被守卫拦）
-      const token = issueToken()
       const req2 = new Request('http://x/api/ai/menu', {
         method: 'POST',
         body: JSON.stringify({}),
-        headers: { 'content-type': 'application/json', cookie: `ai-eat-session=${token}` },
+        headers: { 'content-type': 'application/json', cookie: admin.cookie },
       })
       expect((await POST(req2)).status).not.toBe(401)
-    } finally {
-      delete process.env.PASSWORD
     }
   })
   let dir: string

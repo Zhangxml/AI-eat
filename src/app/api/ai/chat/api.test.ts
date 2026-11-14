@@ -18,7 +18,7 @@ vi.mock('@/lib/recipe-store', async importOriginal => {
 })
 
 import { POST } from './route'
-import { issueToken } from '@/lib/auth'
+import { enableMultiUser } from '@/lib/test-helpers'
 import { aiChatStream, aiComplete, type ChatMessage } from '@/lib/ai-client'
 import { listRecipes, createRecipe } from '@/lib/recipe-store'
 import type { Recipe } from '@/lib/recipe-types'
@@ -117,20 +117,17 @@ const ENV_KEYS = [
 describe('POST /api/ai/chat', () => {
 
   it('启用鉴权后未带会话 → 401（守卫在 handler 首行，未触 AI 调用）', async () => {
-    process.env.PASSWORD = 'test-pw'
-    try {
+    const admin = await enableMultiUser()
+    {
       const denied = await POST(jsonReq({ messages: [{ role: 'user', content: 'hi' }] }))
       expect(denied.status).toBe(401)
       // 带合法会话则放行（继续走到参数/AI 环节，不再被守卫拦）
-      const token = issueToken()
       const req2 = new Request('http://x/api/ai/chat', {
         method: 'POST',
         body: JSON.stringify({}),
-        headers: { 'content-type': 'application/json', cookie: `ai-eat-session=${token}` },
+        headers: { 'content-type': 'application/json', cookie: admin.cookie },
       })
       expect((await POST(req2)).status).not.toBe(401)
-    } finally {
-      delete process.env.PASSWORD
     }
   })
   let dir: string
