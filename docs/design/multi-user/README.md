@@ -48,7 +48,7 @@ data/
 
 ### 密码模式（`PASSWORD` 非空）
 
-- 管理员：登录页用户名预填**第一个管理员的名字**（禁止改名，所以稳定），密码就是 `PASSWORD`；
+- 管理员：用户名自己输入（不预填），密码就是 `PASSWORD`；
   `users.json` 里管理员的 `passwordHash` **不参与校验**（env 唯一）；
 - 管理员**不能改名、不能改密**（密码由 env 控制）、不能禁用/删除；
 - 其他用户：走各自 `users.json` 里的 scrypt 密码，`disabled` 照常拒绝；
@@ -140,7 +140,7 @@ middleware 放行 → 骨架渲染 → API 401 才跳（实测复现）。
 
 ## 登录与初始化
 
-- `GET /api/auth` → `{ needsSetup, enabled, passwordless?, defaultUsername?, currentUser? }`
+- `GET /api/auth` → `{ needsSetup, enabled, passwordless?, currentUser? }`
 - `POST /api/auth { username, password }` → 200 + Set-Cookie
   - 凭据错误：401「用户名或口令错误」（不区分用户名/密码错，防枚举；用户不存在时也跑一次等价 scrypt 校验，防时间侧信道）
   - 并发/重复初始化：409「已初始化：请直接登录」（只有一个请求能建出管理员）

@@ -48,11 +48,7 @@ describe('/api/auth', () => {
 
   it('GET：无用户时 needsSetup=true（密码模式需登录）', async () => {
     const body = await (await GET(getReq())).json()
-    expect(body).toEqual({
-      needsSetup: true,
-      enabled: true,
-      defaultUsername: '管理员',
-    })
+    expect(body).toEqual({ needsSetup: true, enabled: true })
   })
 
   it('POST：首次用 username+password 初始化管理员，并下发会话 Cookie', async () => {

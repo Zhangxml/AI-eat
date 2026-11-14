@@ -10,7 +10,7 @@
 // - 登录失败限流：同 IP + 同名 5 次失败后指数退避（本次纳入）
 import { timingSafeEqual } from 'node:crypto'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
-import { DEFAULT_ADMIN_NAME, bootstrapRequired, firstAdmin, requireSession } from '@/lib/auth'
+import { bootstrapRequired, requireSession } from '@/lib/auth'
 import { isPasswordlessMode } from '@/lib/auth-mode'
 import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { hashPassword, verifyPassword } from '@/lib/password-hash'
@@ -216,7 +216,6 @@ export async function POST(req: Request): Promise<Response> {
 // GET /api/auth：登录页据此决定「免密直接进 / 初始化 / 登录」，以及预填哪个用户名
 // - passwordless=true → 前端直接跳首页（免密模式没有登录动作）
 // - needsSetup=true  → 初始化表单（密码必须等于 env.PASSWORD）
-// - defaultUsername  → 登录页用户名预填（第一个管理员的实际名字）
 export async function GET(req: Request): Promise<Response> {
   if (isPasswordlessMode()) {
     // requireSession 会顺带完成「首次运行自动建管理员 + 接管旧数据」
@@ -231,19 +230,16 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const needsSetup = await bootstrapRequired()
-  const admin = needsSetup ? null : await firstAdmin()
-  const defaultUsername = admin?.name ?? DEFAULT_ADMIN_NAME
   if (needsSetup) {
-    return Response.json({ needsSetup: true, enabled: true, defaultUsername })
+    return Response.json({ needsSetup: true, enabled: true })
   }
   const auth = await requireSession(req)
   if (!auth.ok) {
-    return Response.json({ needsSetup: false, enabled: true, defaultUsername })
+    return Response.json({ needsSetup: false, enabled: true })
   }
   return Response.json({
     needsSetup: false,
     enabled: true,
-    defaultUsername,
     currentUser: { name: auth.user.name, role: auth.user.role },
   })
 }

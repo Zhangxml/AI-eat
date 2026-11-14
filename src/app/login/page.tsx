@@ -12,8 +12,6 @@ interface AuthState {
   enabled: boolean
   /** 免密单用户模式：直接进站，不显示表单 */
   passwordless?: boolean
-  /** 用户名预填（第一个管理员的实际名字；管理员禁止改名，所以稳定） */
-  defaultUsername?: string
   currentUser?: { name: string; role: string }
 }
 
@@ -43,8 +41,6 @@ export default function LoginPage() {
       .then((data: AuthState) => {
         if (!alive) return
         setState(data)
-        // 预填用户名：管理员禁止改名，所以这个值稳定；用户只需输密码
-        if (data.defaultUsername) setUsername(data.defaultUsername)
         // 已登录 / 免密模式直接回目标页。
         // 必须整页跳转（location.replace）：登录态刚变化时，Next 客户端路由缓存里可能还存着
         // 「未登录 → 307 到 /login」的预取结果，用 router.replace 会复用该缓存、又被弹回登录页。
