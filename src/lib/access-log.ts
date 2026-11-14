@@ -52,6 +52,22 @@ export function clientIpOf(req: Request): string {
   return addr && addr !== '' ? addr : 'unknown'
 }
 
+/**
+ * 限流/防刷用的「可信来源」。**不要**用 clientIpOf：
+ * 直连部署时 Next 不会覆写客户端自带的 `x-forwarded-for`，末段同样由客户端控制，
+ * 每请求换一个值就能无限绕过 (IP, 用户名) 失败退避（实测有效）。
+ * 所以：只有显式 `TRUST_PROXY=true`（前面有会覆写该头的可信反代）才采信 XFF，
+ * 否则返回固定值 —— 所有直连请求共享同一个限流桶，宁可误伤也不能被绕过。
+ */
+export function throttleIpOf(req: Request): string {
+  if (process.env.TRUST_PROXY === 'true') {
+    const fwd = req.headers.get('x-forwarded-for')
+    const first = fwd?.split(',')[0]?.trim()
+    if (first !== undefined && first !== '') return first
+  }
+  return 'direct'
+}
+
 // 追加一条访问记录：写失败静默吞掉——日志是辅助设施，绝不能因日志故障打断主业务响应。
 // 正常路径：fs.appendFile（内核 O_APPEND 单次 write 追加，单行原子，无需先读后写整文件）。
 // 容量压缩路径（仅当条目数达上限）：读旧文件 → 截取最近条目 → 写 .tmp → rename 原子替换；

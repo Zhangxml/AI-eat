@@ -10,7 +10,7 @@ import { promises as fs } from 'node:fs'
 import { requireAdmin } from '@/lib/auth'
 import { isPasswordlessMode } from '@/lib/auth-mode'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
-import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { hashPassword } from '@/lib/password-hash'
 import {
   deleteUser,
@@ -38,7 +38,6 @@ export async function PATCH(
     return Response.json({ error: '当前为免密单用户模式，不支持用户管理' }, { status: 409 })
   }
   const ip = clientIpOf(req)
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   // 必须已进入多用户模式：旧模式（从未初始化）下不允许建号/改号，
   // 否则可绕过 /api/auth 的引导口令抢先建 admin，并让迁移脚本因幂等而永久跳过
   if (!(await multiUserInitialized())) {
@@ -54,12 +53,9 @@ export async function PATCH(
     return Response.json({ error: '用户不存在' }, { status: 404 })
   }
 
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return Response.json({ error: '请求体不是合法 JSON' }, { status: 400 })
-  }
+  const parsed = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.value
   if (typeof body !== 'object' || body === null) {
     return Response.json({ error: '请求体格式非法' }, { status: 400 })
   }
@@ -108,10 +104,16 @@ export async function PATCH(
     if (b.role !== 'admin' && b.role !== 'member') {
       return Response.json({ error: 'role 须为 admin 或 member' }, { status: 400 })
     }
-    // 管理员一律不可降级：管理员密码来自 env.PASSWORD，降级后会走 scrypt 校验，
-    // 而免密期创建的管理员只有一个随机占位 hash —— 等于把账号永久锁死。
-    if (b.role === 'member' && target.role === 'admin') {
-      return Response.json({ error: '管理员账号不能降级' }, { status: 400 })
+    if (b.role !== target.role) {
+      // 一律禁止角色变更：
+      // - 成员 → 管理员：会造出与 env.PASSWORD 共用口令的第二个管理员，
+      //   且之后不可降级/禁用/删除（与 POST 禁止建管理员的口径冲突）；
+      // - 管理员 → 成员：管理员密码来自 env.PASSWORD，降级后会走 scrypt 校验，
+      //   而免密期创建的管理员只有一个随机占位 hash —— 等于把账号永久锁死。
+      return Response.json(
+        { error: '不支持变更角色：管理员密码由环境变量 PASSWORD 控制' },
+        { status: 400 },
+      )
     }
     patch.role = b.role
   }
@@ -137,7 +139,6 @@ export async function DELETE(
     return Response.json({ error: '当前为免密单用户模式，不支持用户管理' }, { status: 409 })
   }
   const ip = clientIpOf(req)
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   // 必须已进入多用户模式：旧模式（从未初始化）下不允许建号/改号，
   // 否则可绕过 /api/auth 的引导口令抢先建 admin，并让迁移脚本因幂等而永久跳过
   if (!(await multiUserInitialized())) {
@@ -160,13 +161,12 @@ export async function DELETE(
     return Response.json({ error: '管理员账号不能删除' }, { status: 400 })
   }
 
-  // 二次确认：body { confirm: '<用户名>' }
-  let body: unknown = null
-  try {
-    body = await req.json()
-  } catch {
-    // 无 body 视为未确认
-  }
+  // 二次确认：body { confirm: '<用户名>' }（无 body 视为未确认，用 readJsonBody 时不能把空体当错误）
+  const parsed = req.body === null
+    ? ({ ok: true as const, value: null })
+    : await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.value
   const confirm = (body as { confirm?: unknown } | null)?.confirm
   if (typeof confirm !== 'string' || confirm.trim() !== target.name) {
     return Response.json(

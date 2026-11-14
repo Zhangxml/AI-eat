@@ -9,10 +9,10 @@
 // - 恒时比较由 scrypt 校验内部完成；用户不存在时也跑一次假校验，避免用响应时间探测用户名
 // - 登录失败限流：同 IP + 同名 5 次失败后指数退避（本次纳入）
 import { timingSafeEqual } from 'node:crypto'
-import { appendAccessLog, clientIpOf } from '@/lib/access-log'
+import { appendAccessLog, clientIpOf, throttleIpOf } from '@/lib/access-log'
 import { bootstrapRequired, requireSession } from '@/lib/auth'
 import { isPasswordlessMode } from '@/lib/auth-mode'
-import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { hashPassword, verifyPassword } from '@/lib/password-hash'
 import { issueSession, sessionCookie } from '@/lib/session'
 import {
@@ -57,20 +57,14 @@ interface AuthBody {
   password?: unknown
 }
 
-async function parseBody(req: Request): Promise<AuthBody | null> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return null
-  }
+function parseBody(body: unknown): AuthBody | null {
   if (typeof body !== 'object' || body === null) return null
   return body as AuthBody
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const ip = clientIpOf(req)
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
+  const ip = clientIpOf(req) // 审计用：尽力而为（可能被伪造，仅作参考）
+  const throttleIp = throttleIpOf(req) // 限流/日志节流用：直连时固定为 'direct'
 
   // 免密单用户模式：系统只有一个身份，不提供登录。其他账号被冻结（数据保留）
   if (isPasswordlessMode()) {
@@ -81,7 +75,13 @@ export async function POST(req: Request): Promise<Response> {
     )
   }
 
-  const body = await parseBody(req)
+  // 体积闸门 + JSON 解析（流式累计，chunked 也绕不过）
+  const bodyResult = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!bodyResult.ok) {
+    await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: bodyResult.response.status })
+    return bodyResult.response
+  }
+  const body = parseBody(bodyResult.value)
   const username = typeof body?.username === 'string' ? body.username.trim() : ''
   const password = typeof body?.password === 'string' ? body.password : ''
   if (body === null || username === '' || password === '') {
@@ -93,7 +93,7 @@ export async function POST(req: Request): Promise<Response> {
 
   // ---- 首次初始化：还没有任何用户 ----
   if (await bootstrapRequired()) {
-    const key = attemptKey(ip, username)
+    const key = attemptKey(throttleIp, username)
     const wait = backoffRemaining(key, now)
     if (wait > 0) {
       return Response.json({ error: `尝试过于频繁，请 ${Math.ceil(wait / 1000)} 秒后再试` }, { status: 429 })
@@ -102,7 +102,7 @@ export async function POST(req: Request): Promise<Response> {
     const bootstrapPassword = process.env.PASSWORD ?? ''
     if (bootstrapPassword !== '' && password !== bootstrapPassword) {
       recordFailure(key, now)
-      if (shouldLog(ip, now)) {
+      if (shouldLog(throttleIp, now)) {
         await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 401 })
       }
       return Response.json({ error: '用户名或口令错误' }, { status: 401 })
@@ -154,7 +154,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ---- 常规登录 ----
-  const key = attemptKey(ip, username)
+  const key = attemptKey(throttleIp, username)
   const wait = backoffRemaining(key, now)
   if (wait > 0) {
     return Response.json({ error: `尝试过于频繁，请 ${Math.ceil(wait / 1000)} 秒后再试` }, { status: 429 })
@@ -186,7 +186,7 @@ export async function POST(req: Request): Promise<Response> {
 
   if (!ok || user === null || user.disabled) {
     recordFailure(key, now)
-    if (shouldLog(ip, now)) {
+    if (shouldLog(throttleIp, now)) {
       await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 401 })
     }
     return Response.json({ error: '用户名或口令错误' }, { status: 401 })

@@ -5,7 +5,7 @@
 import { requireAdmin } from '@/lib/auth'
 import { isPasswordlessMode } from '@/lib/auth-mode'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
-import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { hashPassword } from '@/lib/password-hash'
 import { createUser, listUsers, multiUserInitialized, type User } from '@/lib/user-store'
 
@@ -48,7 +48,6 @@ export async function POST(req: Request): Promise<Response> {
   const auth = await requireAdmin(req)
   if (!auth.ok) return auth.res
   const ip = clientIpOf(req)
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   // 免密单用户模式：不支持创建用户（创建后也无法登录，避免用户困惑）
   if (isPasswordlessMode()) {
     await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/users', status: 409 })
@@ -66,19 +65,23 @@ export async function POST(req: Request): Promise<Response> {
     )
   }
 
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/users', status: 400 })
-    return Response.json({ error: '请求体不是合法 JSON' }, { status: 400 })
+  const parsed = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!parsed.ok) {
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/users', status: parsed.response.status })
+    return parsed.response
   }
+  const body = parsed.value
   if (typeof body !== 'object' || body === null) {
     return Response.json({ error: '请求体格式非法' }, { status: 400 })
   }
   const b = body as Record<string, unknown>
   const name = typeof b.name === 'string' ? b.name.trim() : ''
   const password = typeof b.password === 'string' ? b.password : ''
+  // role 只接受缺省/显式 member；其他值（含 "Admin" 这类大小写变体）明确 400，
+  // 不静默降级——否则调用方会以为拿到了想要的角色
+  if (b.role !== undefined && b.role !== 'member' && b.role !== 'admin') {
+    return Response.json({ error: 'role 须为 member 或 admin' }, { status: 400 })
+  }
   // 管理员只能有一个（密码由 env.PASSWORD 控制，所有 admin 共用同一口令）。
   // 允许通过接口建 admin 会让「填写的初始密码」静默失效，也让审计里的 user 名不可信。
   if (b.role === 'admin') {

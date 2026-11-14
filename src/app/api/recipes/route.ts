@@ -2,19 +2,13 @@
 import { listRecipes, createRecipe, filterRecipes, buildFacets } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe, Recipe } from '@/lib/recipe-types'
-import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireSession } from '@/lib/auth'
 import { recipesDirFor } from '@/lib/user-paths'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 
-// 读取 JSON body 并用 zod 校验为草稿；解析失败或校验失败返回 null
-async function parseDraft(req: Request): Promise<DraftRecipe | null> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return null
-  }
+// 用 zod 校验草稿；结构非法返回 null（JSON 解析与体积上限由 readJsonBody 负责）
+function parseDraft(body: unknown): DraftRecipe | null {
   return validateDraft(body)
 }
 
@@ -55,13 +49,14 @@ export async function POST(req: Request) {
   const auth = await requireSession(req)
   if (!auth.ok) return auth.res
   const dir = recipesDirFor(auth.user.id)
-  // body 体积前置闸门（审计修复 #4）：content-length 超 1MB 直接 413，不进解析
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
-    await appendAccessLog({ ip: clientIpOf(req), user: auth.user.name, method: 'POST', path: '/api/recipes', status: 413 })
-    return bodyTooLarge()
-  }
   const ip = clientIpOf(req)
-  const draft = await parseDraft(req)
+  // 体积闸门 + JSON 解析：流式累计字节，chunked 也绕不过 1MB（只靠 content-length 可被绕过）
+  const parsed = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!parsed.ok) {
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/recipes', status: parsed.response.status })
+    return parsed.response
+  }
+  const draft = parseDraft(parsed.value)
   if (!draft) {
     await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/recipes', status: 400 })
     return Response.json({ error: '请求体不是合法的菜谱草稿' }, { status: 400 })

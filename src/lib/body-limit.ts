@@ -19,3 +19,60 @@ export function checkBodySize(req: Request, limitBytes: number): boolean {
 export function bodyTooLarge(): Response {
   return Response.json({ error: '请求体过大' }, { status: 413 })
 }
+
+export type JsonBodyResult =
+  | { ok: true; value: unknown }
+  | { ok: false; response: Response }
+
+/**
+ * 读取并解析 JSON 请求体，带**真实**体积上限。
+ *
+ * 为什么不能只看 content-length（checkBodySize）：
+ * `Transfer-Encoding: chunked` 没有该头，或客户端可以少报。实测同一份 1.1MB 的合法请求，
+ * 带 Content-Length 会被 413 拦下，改成 chunked 就直接入库 —— 上限形同虚设。
+ * 这里改为流式累计字节，超限立即 cancel，不把整个 body 读进内存。
+ */
+export async function readJsonBody(req: Request, limitBytes: number): Promise<JsonBodyResult> {
+  // 快速失败：有 content-length 且明显超限时不必开始读
+  const raw = req.headers.get('content-length')
+  if (raw !== null) {
+    const len = Number(raw)
+    if (Number.isFinite(len) && len > limitBytes) {
+      return { ok: false, response: bodyTooLarge() }
+    }
+  }
+  if (req.body === null) {
+    return { ok: false, response: Response.json({ error: '请求体不能为空' }, { status: 400 }) }
+  }
+
+  const reader = req.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined) continue
+      total += value.byteLength
+      if (total > limitBytes) {
+        await reader.cancel().catch(() => {})
+        return { ok: false, response: bodyTooLarge() }
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return { ok: false, response: Response.json({ error: '请求体读取失败' }, { status: 400 }) }
+  }
+
+  const buf = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    buf.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return { ok: true, value: JSON.parse(new TextDecoder().decode(buf)) }
+  } catch {
+    return { ok: false, response: Response.json({ error: '请求体不是合法 JSON' }, { status: 400 }) }
+  }
+}

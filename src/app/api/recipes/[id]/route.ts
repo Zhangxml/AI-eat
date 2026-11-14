@@ -2,20 +2,14 @@
 import { getRecipe, updateRecipe, deleteRecipe } from '@/lib/recipe-store'
 import { validateDraft } from '@/lib/recipe-types'
 import type { DraftRecipe } from '@/lib/recipe-types'
-import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireSession } from '@/lib/auth'
 import { recipesDirFor } from '@/lib/user-paths'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { timingSafeEqual } from 'node:crypto'
 
-// 读取 JSON body 并用 zod 校验为草稿；解析失败或校验失败返回 null
-async function parseDraft(req: Request): Promise<DraftRecipe | null> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return null
-  }
+// 用 zod 校验草稿；结构非法返回 null（JSON 解析与体积上限由 readJsonBody 负责）
+function parseDraft(body: unknown): DraftRecipe | null {
   return validateDraft(body)
 }
 
@@ -39,12 +33,13 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   const dir = recipesDirFor(auth.user.id)
   const { id } = await ctx.params
   const ip = clientIpOf(req)
-  // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
-    await appendAccessLog({ ip, user: auth.user.name, method: 'PUT', path: `/api/recipes/${id}`, status: 413 })
-    return bodyTooLarge()
+  // 体积闸门 + JSON 解析（流式累计，chunked 也绕不过）
+  const parsed = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!parsed.ok) {
+    await appendAccessLog({ ip, user: auth.user.name, method: 'PUT', path: `/api/recipes/${id}`, status: parsed.response.status })
+    return parsed.response
   }
-  const draft = await parseDraft(req)
+  const draft = parseDraft(parsed.value)
   if (!draft) {
     // 访问日志（方案 A：写操作；400 也如实记录）
     await appendAccessLog({ ip, user: auth.user.name, method: 'PUT', path: `/api/recipes/${id}`, status: 400 })
@@ -71,21 +66,18 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   const auth = await requireSession(req)
   if (!auth.ok) return auth.res
   const dir = recipesDirFor(auth.user.id)
-  // body 体积前置闸门（审计修复 #4）：删除密码 body 极小，超 1MB 必然非法，不进解析
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
   const ip = clientIpOf(req)
   // 删除保护开关：显式 DELETE_ENABLED=true 且密码非空才启用（两个条件缺一不可，防只配一半半失效）
   const deleteGuardEnabled = process.env.DELETE_ENABLED === 'true' && Boolean(process.env.DELETE_PASSWORD)
   let suppliedPassword: string | undefined
   if (deleteGuardEnabled) {
-    // 启用保护时必须读 body 取密码；格式非法按校验失败处理（403 与密码错误同文案，不泄漏具体原因）
-    let body: unknown
-    try {
-      body = await req.json()
-    } catch {
+    // 启用保护时才读 body。体积/JSON 非法一律按「密码校验失败」返回 403（与密码错同文案，不泄漏原因）
+    const parsed = await readJsonBody(req, BODY_LIMIT_BYTES)
+    if (!parsed.ok) {
       await appendAccessLog({ ip, user: auth.user.name, method: 'DELETE', path: '/api/recipes/:id', status: 403 })
       return Response.json({ error: '删除密码校验失败' }, { status: 403 })
     }
+    const body = parsed.value
     if (typeof body !== 'object' || body === null) {
       await appendAccessLog({ ip, user: auth.user.name, method: 'DELETE', path: '/api/recipes/:id', status: 403 })
       return Response.json({ error: '删除密码校验失败' }, { status: 403 })

@@ -4,7 +4,7 @@
 import { aiComplete, loadAiConfig, type ChatMessage } from '@/lib/ai-client'
 import { extractJson, NUTRITION_FORMAT_RULE } from '@/lib/ai-prompts'
 import { validateNutrition, type Nutrition } from '@/lib/recipe-types'
-import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireSession } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { resolveTemperature } from '@/lib/ai-temperatures'
@@ -19,13 +19,7 @@ type NutritionInput = { dish?: string; ingredients?: string[]; steps?: string[] 
 // 返回 { input } 或 { error } 以便给出准确的 400 文案（泛化成「至少提供一个」会误导用户）
 type ParseResult = { input: NutritionInput; error?: never } | { input?: never; error: string }
 
-async function parseInput(req: Request): Promise<ParseResult> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return { error: '请求体不是合法 JSON' }
-  }
+function parseInput(body: unknown): ParseResult {
   if (typeof body !== 'object' || body === null) return { error: '请求体格式非法' }
   const raw = body as Record<string, unknown>
 
@@ -76,11 +70,14 @@ export async function POST(req: Request): Promise<Response> {
   const auth = await requireSession(req)
   if (!auth.ok) return auth.res
   const ip = clientIpOf(req)
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
-    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/nutrition', status: 413 })
-    return bodyTooLarge()
+  const bodyResult = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!bodyResult.ok) {
+    if (bodyResult.response.status === 413) {
+      await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/nutrition', status: 413 })
+    }
+    return bodyResult.response
   }
-  const parsed = await parseInput(req)
+  const parsed = parseInput(bodyResult.value)
   if (parsed.error !== undefined) {
     await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/nutrition', status: 400 })
     return Response.json({ error: parsed.error }, { status: 400 })

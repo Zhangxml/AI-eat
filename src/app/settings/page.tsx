@@ -394,7 +394,11 @@ export default function SettingsPage() {
               {me.name}
             </p>
             <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
-              {me.role === 'admin' ? '管理员（可管理账号与查看访问记录）' : '普通成员'}
+              {me.role === 'admin'
+                ? config?.authEnabled === true
+                  ? '管理员（可管理账号与查看访问记录）'
+                  : '管理员（免密单用户）'
+                : '普通成员'}
             </p>
           </div>
           {/* 免密单用户模式没有登录动作，退出登录没有意义（点了只会清 Cookie 再被弹回首页）：

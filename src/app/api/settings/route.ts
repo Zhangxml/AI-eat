@@ -7,7 +7,7 @@ import { requireSession } from '@/lib/auth'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
 import { mergeSettings, validateSettingsPatch } from '@/lib/settings'
 import { readSettings, writeSettings } from '@/lib/settings-store'
-import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 
 export async function GET(req: Request): Promise<Response> {
   const auth = await requireSession(req)
@@ -20,16 +20,13 @@ export async function PATCH(req: Request): Promise<Response> {
   const auth = await requireSession(req)
   if (!auth.ok) return auth.res
   const ip = clientIpOf(req)
-  // 设置体积极小，1MB 闸门只是统一口径
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
-
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    await appendAccessLog({ ip, user: auth.user.name, method: 'PATCH', path: '/api/settings', status: 400 })
-    return Response.json({ error: '请求体不是合法 JSON' }, { status: 400 })
+  // 设置体积极小，1MB 闸门只是统一口径（流式累计，chunked 也绕不过）
+  const parsed = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!parsed.ok) {
+    await appendAccessLog({ ip, user: auth.user.name, method: 'PATCH', path: '/api/settings', status: parsed.response.status })
+    return parsed.response
   }
+  const body = parsed.value
   // strict 校验：未知键/非法值一律 400（防拼写错误被静默忽略）
   const patch = validateSettingsPatch(body)
   if (!patch) {

@@ -85,6 +85,11 @@ describe('/api/users', () => {
     const asAdmin = await POST(json({ name: '爸爸2', password: 'papa-1234', role: 'admin' }, admin.cookie))
     expect(asAdmin.status).toBe(400)
     expect(((await asAdmin.json()) as { error: string }).error).toContain('PASSWORD')
+
+    // 大小写变体 / 其他非法值 → 400（不静默降级为 member）
+    const badRole = await POST(json({ name: '小明2', password: 'abcd1234', role: 'Admin' }, admin.cookie))
+    expect(badRole.status).toBe(400)
+    expect(((await badRole.json()) as { error: string }).error).toContain('role')
   })
 
   it('POST 建号后该用户可登录（哈希正确写入）', async () => {
@@ -179,6 +184,16 @@ describe('/api/users', () => {
     expect((await DELETE(json({ confirm: '成员' }, admin.cookie, 'DELETE'), ctxOf(member.user.id))).status).toBe(409)
     // 数据未被动过
     expect((await listUsers()).map(u => u.name).sort()).toEqual(['成员', '管理员'].sort())
+  })
+
+  it('不能把成员提升为管理员（与 POST 禁止建管理员同口径）', async () => {
+    const admin = await enableMultiUser()
+    const member = await makeSession('成员', 'member')
+    const r = await PATCH(json({ role: 'admin' }, admin.cookie, 'PATCH'), ctxOf(member.user.id))
+    expect(r.status).toBe(400)
+    expect(((await r.json()) as { error: string }).error).toContain('不支持变更角色')
+    // 角色未被改动
+    expect((await listUsers()).find(u => u.id === member.user.id)?.role).toBe('member')
   })
 
   it('管理员账号不能改名、不能改密（密码由 env.PASSWORD 控制）', async () => {

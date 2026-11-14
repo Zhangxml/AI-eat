@@ -17,7 +17,7 @@ import { readSettings } from '@/lib/settings-store'
 import { makeRecipeId, type Recipe } from '@/lib/recipe-types'
 import { sseEvent, sseHeaders } from '@/lib/sse'
 import { startSseHeartbeat } from '@/lib/sse-heartbeat'
-import { checkBodySize, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireSession } from '@/lib/auth'
 import { recipesDirFor } from '@/lib/user-paths'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
@@ -33,13 +33,7 @@ const CHAT_MAX_TOTAL_CHARS = 50000
 // 校验 body：messages 须为非空数组，每项为合法 ChatMessage；非法返回 null（route 层转 400）
 // 审计 #14：只接受 user/assistant——客户端自带 system 消息会排在服务端注入的系统提示词之后，
 // 可借此改写格式约束/人设（默认免登录场景等于把「带 key 的代理」交给任意局域网设备），一律拒绝
-async function parseInput(req: Request): Promise<ChatMessage[] | null> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return null
-  }
+function parseInput(body: unknown): ChatMessage[] | null {
   if (typeof body !== 'object' || body === null) return null
   const messages = (body as { messages?: unknown }).messages
   if (!Array.isArray(messages) || messages.length === 0) return null
@@ -208,12 +202,14 @@ export async function POST(req: Request): Promise<Response> {
   if (!auth.ok) return auth.res
   const dir = recipesDirFor(auth.user.id)
   const ip = clientIpOf(req)
-  // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) {
+  // 体积闸门 + JSON 解析（流式累计，chunked 也绕不过）
+  const bodyResult = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!bodyResult.ok && bodyResult.response.status === 413) {
     await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 413 })
-    return Response.json({ error: '请求体过大' }, { status: 413 })
+    return bodyResult.response
   }
-  const messages = await parseInput(req)
+  // 非法 JSON / 空体不在这里报，交给参数校验返回统一的「参数缺失或非法」文案
+  const messages = bodyResult.ok ? parseInput(bodyResult.value) : null
   if (!messages) {
     await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/ai/chat', status: 400 })
     return Response.json({ error: '参数缺失或非法：messages 须为非空的消息数组' }, { status: 400 })

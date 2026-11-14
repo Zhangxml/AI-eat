@@ -11,7 +11,7 @@ import { systemPromptWithLibrary, extractJson, MENU_FORMAT_RULE, SHOPPING_GROUPS
 import { listRecipes } from '@/lib/recipe-store'
 import { readSettings } from '@/lib/settings-store'
 import type { Recipe } from '@/lib/recipe-types'
-import { checkBodySize, bodyTooLarge, BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireSession } from '@/lib/auth'
 import { recipesDirFor } from '@/lib/user-paths'
 import { appendAccessLog, clientIpOf } from '@/lib/access-log'
@@ -95,15 +95,9 @@ function extractMenuJson(text: string): z.infer<typeof menuSchema> | null {
 }
 
 // 读取 JSON body 并做参数校验；非法返回 null（route 层转 400）
-async function parseInput(
-  req: Request,
-): Promise<{ people: number; days: number; preference?: string } | null> {
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    return null
-  }
+function parseInput(
+  body: unknown,
+): { people: number; days: number; preference?: string } | null {
   if (typeof body !== 'object' || body === null) return null
   const b = body as Record<string, unknown>
 
@@ -187,8 +181,10 @@ export async function POST(req: Request): Promise<Response> {
   if (!auth.ok) return auth.res
   const dir = recipesDirFor(auth.user.id)
   // body 体积前置闸门（审计修复 #4）：超 1MB 直接 413，不进解析
-  if (!checkBodySize(req, BODY_LIMIT_BYTES)) return bodyTooLarge()
-  const input = await parseInput(req)
+  const bodyResult = await readJsonBody(req, BODY_LIMIT_BYTES)
+  if (!bodyResult.ok && bodyResult.response.status === 413) return bodyResult.response
+  // 非法 JSON / 空体交给参数校验，保持原有中文文案
+  const input = bodyResult.ok ? parseInput(bodyResult.value) : null
   if (!input) {
     await appendAccessLog({ ip: clientIpOf(req), user: auth.user.name, method: 'POST', path: '/api/ai/menu', status: 400 })
     return Response.json(

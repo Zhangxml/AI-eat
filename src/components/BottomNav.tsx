@@ -24,6 +24,9 @@ export default function BottomNav() {
   const onHiddenPage = isHiddenSettingsPage(pathname)
   const isActive = (href: string) => isNavActive(pathname, href)
 
+  // 登录/初始化页不显示导航：未认证时点任何一个 tab 都只会被中间件再弹回登录页
+  if (pathname === '/login') return null
+
   return (
     /* 外层固定底部、全宽背景与上边框（视觉上是一条通栏分隔线）。
        h-14 必须留在外层：放进内层后 border-t 的 1px 会落在高度之外，

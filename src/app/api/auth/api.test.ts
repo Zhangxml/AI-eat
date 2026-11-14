@@ -187,6 +187,29 @@ describe('/api/auth', () => {
     expect((await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))).status).toBe(503)
   })
 
+  it('伪造 X-Forwarded-For 不能绕过登录限流（直连时忽略 XFF）', async () => {
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    // 同一个用户名连错 5 次，每次都换一个伪造 XFF —— 旧实现会把它当成不同来源
+    for (let i = 0; i < 5; i++) {
+      const res = await POST(
+        new Request('http://x/api/auth', {
+          method: 'POST',
+          body: JSON.stringify({ username: '爸爸', password: 'bad' }),
+          headers: { 'content-type': 'application/json', 'x-forwarded-for': `9.9.9.${i}` },
+        }),
+      )
+      expect(res.status).toBe(401)
+    }
+    const sixth = await POST(
+      new Request('http://x/api/auth', {
+        method: 'POST',
+        body: JSON.stringify({ username: '爸爸', password: 'bad' }),
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': '9.9.9.99' },
+      }),
+    )
+    expect(sixth.status).toBe(429)
+  })
+
   it('PASSWORD 少于 4 位也能完成初始化（密码由 env 决定，不被长度检查卡死）', async () => {
     process.env.PASSWORD = 'abc'
     const res = await POST(loginReq({ username: '管理员', password: 'abc' }))

@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { listRecipes, getRecipe, putRecipe } from '@/lib/recipe-store'
 import { validateRecipe } from '@/lib/recipe-types'
 import type { Recipe } from '@/lib/recipe-types'
-import { checkBodySize, bodyTooLarge, BACKUP_BODY_LIMIT_BYTES } from '@/lib/body-limit'
+import { readJsonBody, BACKUP_BODY_LIMIT_BYTES } from '@/lib/body-limit'
 import { requireSession } from '@/lib/auth'
 import { recipesDirFor } from '@/lib/user-paths'
 import { listUsers } from '@/lib/user-store'
@@ -131,15 +131,13 @@ export async function POST(req: Request): Promise<Response> {
   // 导入永远只写自己的库（即使管理员，也不支持把备份灌进别人目录——避免误操作）
   const dir = recipesDirFor(auth.user.id)
   const ip = clientIpOf(req)
-  // body 体积前置闸门（审计修复 #4）：备份整库合法体积更大，上限放宽到 5MB
-  if (!checkBodySize(req, BACKUP_BODY_LIMIT_BYTES)) return bodyTooLarge()
-  let body: unknown
-  try {
-    body = await req.json()
-  } catch {
-    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/backup', status: 400 })
-    return Response.json({ error: '请求体不是合法 JSON' }, { status: 400 })
+  // 体积闸门 + JSON 解析：备份整库合法体积更大，上限 5MB（流式累计，chunked 也绕不过）
+  const bodyResult = await readJsonBody(req, BACKUP_BODY_LIMIT_BYTES)
+  if (!bodyResult.ok) {
+    await appendAccessLog({ ip, user: auth.user.name, method: 'POST', path: '/api/backup', status: bodyResult.response.status })
+    return bodyResult.response
   }
+  const body = bodyResult.value
   // 顶层宽校验：仅 recipes 键存在且为数组，失败即整体 400（顶层结构错误）
   const parsed = backupEnvelopeSchema.safeParse(body)
   if (!parsed.success) {
