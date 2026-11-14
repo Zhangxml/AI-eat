@@ -138,23 +138,30 @@ export default function RecipesPage() {
       </div>
 
       {/* 筛选区：分类 / 标签各一行、单行横滑；均以「全部」为首项且默认选中。
-          标签行的 options 来自 facets.tags——已随分类收敛，故不会点出必然为空的组合 */}
-      <div className="mb-3 flex flex-col gap-2">
-        <FilterRow
-          label="分类"
-          ariaLabel="按分类筛选"
-          options={facets.categories}
-          value={category}
-          onChange={handleCategoryChange}
-        />
-        <FilterRow
-          label="标签"
-          ariaLabel="按标签筛选"
-          options={facets.tags}
-          value={tag}
-          onChange={(next) => dispatchDims({ type: 'setTag', value: next })}
-        />
-      </div>
+          标签行的 options 来自 facets.tags——已随分类收敛，故不会点出必然为空的组合。
+          没有对应数据时不渲染该行（空库时两行都消失）：只有「全部」一个选项的筛选没有意义。 */}
+      {!loading && (facets.categories.length > 0 || facets.tags.length > 0) && (
+        <div className="mb-3 flex flex-col gap-2">
+          {facets.categories.length > 0 && (
+            <FilterRow
+              label="分类"
+              ariaLabel="按分类筛选"
+              options={facets.categories}
+              value={category}
+              onChange={handleCategoryChange}
+            />
+          )}
+          {facets.tags.length > 0 && (
+            <FilterRow
+              label="标签"
+              ariaLabel="按标签筛选"
+              options={facets.tags}
+              value={tag}
+              onChange={(next) => dispatchDims({ type: 'setTag', value: next })}
+            />
+          )}
+        </div>
+      )}
 
       {/* 列表主体：加载中 / 空态 / 列表三态 */}
       {loading ? (
