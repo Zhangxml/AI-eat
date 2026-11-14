@@ -117,7 +117,15 @@ export async function readAccessLogs(): Promise<AccessLogEntry[]> {
           typeof obj.path === 'string' &&
           typeof obj.status === 'number'
         ) {
-          out.push({ time: obj.time, ip: obj.ip, method: obj.method, path: obj.path, status: obj.status })
+          // 重建对象时**必须带上 user**（旧记录没有该字段 → 保持 undefined）
+          out.push({
+            time: obj.time,
+            ip: obj.ip,
+            method: obj.method,
+            path: obj.path,
+            status: obj.status,
+            ...(typeof obj.user === 'string' && obj.user !== '' ? { user: obj.user } : {}),
+          })
         }
       } catch {
         // 单行坏数据跳过（手改文件容忍语义，与菜谱库一致）

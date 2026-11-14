@@ -86,6 +86,29 @@ describe('访问日志', () => {
     expect(((await again.json()) as { logs: unknown[] }).logs).toHaveLength(1)
   })
 
+  it('审计条目带 user 字段；旧记录（无 user）照常可读且不补默认值', async () => {
+    const admin = await enableMultiUser()
+    // 一条新纪录（带 user）+ 一条旧格式（无 user）
+    await appendAccessLog({ ip: '1.1.1.1', method: 'POST', path: '/api/recipes', status: 201, user: '爸爸' })
+    const raw = JSON.stringify({ ip: '2.2.2.2', method: 'GET', path: '/api/old', status: 200, time: new Date().toISOString() })
+    const { promises: fsp } = await import('node:fs')
+    const logFile = path.join(dir, 'data', 'logs', 'access.jsonl')
+    await fsp.appendFile(logFile, raw + '\n', 'utf8')
+
+    const logs = await readAccessLogs()
+    const withUser = logs.find(l => l.path === '/api/recipes')
+    const legacy = logs.find(l => l.path === '/api/old')
+    expect(withUser?.user).toBe('爸爸')
+    // 旧记录没有该字段：不能凭空补一个值（页面据此显示「—」）
+    expect(legacy?.user).toBeUndefined()
+
+    // 接口层也要把 user 透出来
+    const body = (await (await GET(new Request('http://x/api/access-logs', { headers: { cookie: admin.cookie } }))).json()) as {
+      logs: { path: string; user?: string }[]
+    }
+    expect(body.logs.find(l => l.path === '/api/recipes')?.user).toBe('爸爸')
+  })
+
   it('多用户模式下：无会话 → 401；member → 403；admin → 200', async () => {
     const admin = await enableMultiUser()
     const member = await makeSession('普通成员', 'member')
