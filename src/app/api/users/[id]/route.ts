@@ -159,14 +159,40 @@ export async function DELETE(
     )
   }
 
+  // 顺序：先把数据目录改名挪开 → 再删账号 → 最后真正删目录。
+  // 为什么不能像以前那样「先删账号、再 fs.rm().catch(()=>{})」：目录删不掉时会留下
+  // 「不属于任何账号、也不会出现在备份里」的数据黑户，而前端确认框承诺的是「一并删除」。
+  // 先 rename 的好处：deleteUser 失败（并发下用户已不存在等）还能把目录改回来，
+  // 不会出现「数据没了、账号还在」。
+  const trash = `${userDir(id)}.deleting-${Date.now()}`
+  let moved = false
+  try {
+    await fs.rename(userDir(id), trash)
+    moved = true
+  } catch (e) {
+    // 用户可能从未产生过数据（目录不存在）——这不是错误，继续删账号
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      const msg = e instanceof Error ? e.message : String(e)
+      await appendAccessLog({ ip, user: auth.user.name, method: 'DELETE', path: `/api/users/${id}`, status: 500 })
+      return Response.json(
+        { error: `删除用户数据失败：${msg}。账号未删除，请检查 data 目录权限后重试` },
+        { status: 500 },
+      )
+    }
+  }
+
   try {
     await deleteUser(id)
   } catch (e) {
     const msg = e instanceof Error ? e.message : '删除失败'
+    // 账号没删掉 → 把数据目录改回来，避免「数据没了、账号还在」
+    if (moved) await fs.rename(trash, userDir(id)).catch(() => {})
+    await appendAccessLog({ ip, user: auth.user.name, method: 'DELETE', path: `/api/users/${id}`, status: 400 })
     return Response.json({ error: msg }, { status: 400 })
   }
-  // 连带删除数据目录（失败不回滚账号删除——账号已不可登录，残留目录无害）
-  await fs.rm(userDir(id), { recursive: true, force: true }).catch(() => {})
+
+  // 账号已删：目录删除失败只留下一个带 .deleting- 标记的孤儿目录（可人工清理），不影响使用
+  if (moved) await fs.rm(trash, { recursive: true, force: true }).catch(() => {})
 
   await appendAccessLog({ ip, user: auth.user.name, method: 'DELETE', path: `/api/users/${id}`, status: 204 })
   return new Response(null, { status: 204 })

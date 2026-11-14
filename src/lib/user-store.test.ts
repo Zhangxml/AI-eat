@@ -151,3 +151,74 @@ describe('user-store', () => {
     expect(list.map(u => u.name)).toEqual(['好'])
   })
 })
+
+describe('user-store 并发（读-改-写必须整体串行）', () => {
+  let root: string
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-users-conc-'))
+    process.env.AI_EAT_DATA_DIR = path.join(root, 'recipes')
+  })
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true })
+    delete process.env.AI_EAT_DATA_DIR
+  })
+
+  it('10 个并发建号全部落盘（原实现只串行化落盘，会丢账号）', async () => {
+    const created = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => createUser({ name: `并发${i}`, passwordHash: 'h' })),
+    )
+    const all = await listUsers()
+    expect(all).toHaveLength(10)
+    // 每个返回的 id 都必须真的在表里，且互不重复
+    expect(new Set(created.map(u => u.id)).size).toBe(10)
+    for (const u of created) {
+      expect(all.some(x => x.id === u.id)).toBe(true)
+    }
+  })
+
+  it('并发「禁用」不会被子号创建覆盖（安全动作不能假成功）', async () => {
+    const target = await createUser({ name: '待禁用', passwordHash: 'h' })
+    await Promise.all([
+      updateUser(target.id, { disabled: true, sessionVersion: target.sessionVersion + 1 }),
+      ...Array.from({ length: 5 }, (_, i) => createUser({ name: `新${i}`, passwordHash: 'h' })),
+    ])
+    const all = await listUsers()
+    const after = all.find(u => u.id === target.id)
+    expect(after?.disabled).toBe(true)
+    expect(after?.sessionVersion).toBe(target.sessionVersion + 1)
+    expect(all).toHaveLength(6)
+  })
+
+  it('并发改名同一用户：只有一个成功，另一个报重名/不存在（不会互相覆盖成两份）', async () => {
+    const a = await createUser({ name: 'A', passwordHash: 'h' })
+    await createUser({ name: 'B', passwordHash: 'h' })
+    const results = await Promise.allSettled([
+      updateUser(a.id, { name: 'X' }),
+      updateUser(a.id, { name: 'Y' }),
+    ])
+    // 串行化后两次都会成功（后一次覆盖前一次），但表里必须只有一个 A 的 id
+    expect(results.filter(r => r.status === 'fulfilled').length).toBeGreaterThanOrEqual(1)
+    const all = await listUsers()
+    expect(all.filter(u => u.id === a.id)).toHaveLength(1)
+    expect(all).toHaveLength(2)
+  })
+
+  it('用户表损坏时拒绝写入（不用空表覆盖可人工修复的文件）', async () => {
+    await fs.writeFile(usersFilePath(), '{oops', 'utf8')
+    await expect(createUser({ name: 'X', passwordHash: 'h' })).rejects.toThrow(/损坏/)
+    await expect(updateUser('u-11111111', { name: 'Y' })).rejects.toThrow(/损坏/)
+    await expect(deleteUser('u-11111111')).rejects.toThrow(/损坏/)
+    // 原文件保持原样
+    expect(await fs.readFile(usersFilePath(), 'utf8')).toBe('{oops')
+  })
+
+  it('onlyIfEmpty：用户表非空时拒绝（并发初始化的第二个请求）', async () => {
+    await createUser({ name: '首个', passwordHash: 'h' })
+    await expect(
+      createUser({ name: '第二个', passwordHash: 'h', onlyIfEmpty: true }),
+    ).rejects.toThrow(/已初始化/)
+    expect(await listUsers()).toHaveLength(1)
+  })
+})

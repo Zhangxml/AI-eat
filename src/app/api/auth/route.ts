@@ -19,7 +19,7 @@ import {
   clearFailures,
   recordFailure,
 } from '@/lib/login-throttle'
-import { createUser, findUserByName } from '@/lib/user-store'
+import { createUser, findUserByName, readUsersFile } from '@/lib/user-store'
 import { adoptLegacyData } from '@/lib/legacy-migration'
 
 // 登录失败日志节流：同 IP 60 秒内只写首条 401（防刷满审计窗口）
@@ -92,12 +92,17 @@ export async function POST(req: Request): Promise<Response> {
     }
     let created
     try {
-      created = await createUser({ name: username, passwordHash: await hashPassword(password) })
+      // onlyIfEmpty：并发初始化时只有一个能建号，另一个得到「已初始化」而不是多建一个成员账号
+      created = await createUser({
+        name: username,
+        passwordHash: await hashPassword(password),
+        onlyIfEmpty: true,
+      })
     } catch (e) {
-      return Response.json(
-        { error: e instanceof Error ? e.message : '创建失败' },
-        { status: 400 },
-      )
+      const msg = e instanceof Error ? e.message : '创建失败'
+      // 「已初始化」是并发/重复提交的正常结果，按 409 返回，前端可直接提示去登录
+      const code = (e as { code?: string }).code
+      return Response.json({ error: msg }, { status: code === 'ALREADY_INITIALIZED' ? 409 : 400 })
     }
     // 接管单用户时代的旧数据（data/recipes + data/settings.json）。
     // 必须在建号后立刻做：登录页文案承诺「将接收现有菜谱库」，且一旦 users.json 存在，
@@ -109,7 +114,9 @@ export async function POST(req: Request): Promise<Response> {
       await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 500, user: created.name })
       return Response.json(
         {
-          error: `账号已创建，但接管旧菜谱失败：${e instanceof Error ? e.message : String(e)}。请检查 data 目录权限后重启`,
+          error: `账号已创建，但接管旧菜谱失败：${
+            e instanceof Error ? e.message : String(e)
+          }。请检查 AI_EAT_DATA_DIR 配置与 data 目录权限；修复后重新登录会自动重试`,
         },
         { status: 500 },
       )
@@ -130,6 +137,17 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: `尝试过于频繁，请 ${Math.ceil(wait / 1000)} 秒后再试` }, { status: 429 })
   }
 
+  // 已初始化（bootstrapRequired 为 false）时用户表必须可读且非空。
+  // 损坏/为空若按「用户名或口令错误」返回，管理员会一直以为是密码错了，
+  // 与 requireSession 的 503 fail-closed 口径保持一致。
+  const { state: usersState, users: allUsers } = await readUsersFile()
+  if (usersState !== 'ok' || allUsers.length === 0) {
+    return Response.json(
+      { error: '用户表损坏或为空：请从备份恢复 data/users.json 后重试' },
+      { status: 503 },
+    )
+  }
+
   const user = await findUserByName(username)
   // 用户不存在时也跑一次等价校验（防时间侧信道枚举用户名）
   let ok = false
@@ -148,6 +166,18 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   clearFailures(key)
+
+  // 建号时接管旧数据可能因权限/磁盘抖动失败，而那时账号已经建好、`bootstrapRequired()` 也变 false，
+  // 网页不再有「初始化」入口 → 旧数据留在 data/recipes 里却永远进不来。
+  // 这里让「最早创建的账号（旧数据的所有者）」在每次登录时补一次：有完成标记会立即短路，
+  // 失败也不影响登录（下次登录再试）。
+  if (user.role === 'admin') {
+    const oldest = [...allUsers].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0]
+    if (oldest?.id === user.id) {
+      await adoptLegacyData(user.id).catch(() => {})
+    }
+  }
+
   await appendAccessLog({ ip, method: 'POST', path: '/api/auth', status: 200, user: user.name })
   const token = await issueSession({ uid: user.id, ver: user.sessionVersion }, now)
   return Response.json(

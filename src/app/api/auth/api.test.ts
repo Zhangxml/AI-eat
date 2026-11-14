@@ -158,6 +158,10 @@ describe('/api/auth', () => {
     const res = await recipesGet(new Request('http://x/api/recipes'))
     expect(res.status).toBe(503)
     expect(((await res.json()) as { error: string }).error).toContain('用户表损坏')
+    // 登录也必须 503（不能报「用户名或口令错误」，否则管理员会一直以为密码错了）
+    const login = await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect(login.status).toBe(503)
+    expect(((await login.json()) as { error: string }).error).toContain('用户表损坏')
   })
 
   it('已迁移后 users.json 被删除（users/ 目录仍在）→ 503 且不可被抢建号', async () => {
@@ -165,24 +169,91 @@ describe('/api/auth', () => {
     await fs.rm(path.join(root, 'users.json'))
     const { GET: recipesGet } = await import('@/app/api/recipes/route')
     expect((await recipesGet(new Request('http://x/api/recipes'))).status).toBe(503)
-    // 不能进入 bootstrap：否则任何人都能接管
+    // 不能进入 bootstrap：否则任何人都能接管。返回 503（表不可用）而非 401，
+    // 避免把「数据坏了」误报成「密码错了」
     const preempt = await POST(loginReq({ username: '陌生人', password: 'hack1234' }))
-    expect(preempt.status).toBe(401)
+    expect(preempt.status).toBe(503)
     expect((await GET(getReq())).status).toBe(200) // GET 仍返回 needsSetup:false/enabled:true
     const body = await (await GET(getReq())).json()
     expect(body.needsSetup).toBe(false)
   })
 
-  it('空表 {"users":[]} → 503（不当成未迁移）', async () => {
+  it('空表 {"users":[]} → 503（不当成未迁移，登录也不报密码错）', async () => {
     await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
     await fs.writeFile(path.join(root, 'users.json'), JSON.stringify({ version: 1, users: [] }), 'utf8')
     const { GET: recipesGet } = await import('@/app/api/recipes/route')
     expect((await recipesGet(new Request('http://x/api/recipes'))).status).toBe(503)
+    expect((await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))).status).toBe(503)
+  })
+
+  it('并发初始化：只有一个建号成功，另一个 409（不会建出两个账号）', async () => {
+    const [a, b] = await Promise.all([
+      POST(loginReq({ username: '甲', password: 'pass1234' })),
+      POST(loginReq({ username: '乙', password: 'pass1234' })),
+    ])
+    expect([a.status, b.status].sort()).toEqual([200, 409])
+    const users = await listUsers()
+    expect(users).toHaveLength(1)
+    expect(users[0].role).toBe('admin')
   })
 
   it('用户存在后 getUser 能按 id 查到（初始化链路完整）', async () => {
     await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
     const [u] = await listUsers()
     expect((await getUser(u.id))?.name).toBe('爸爸')
+  })
+})
+
+describe('建号迁移失败后的自愈', () => {
+  let root: string
+  let prevEnv: Record<string, string | undefined>
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'ai-eat-auth-heal-'))
+    prevEnv = {
+      AI_EAT_DATA_DIR: process.env.AI_EAT_DATA_DIR,
+      SESSION_SECRET: process.env.SESSION_SECRET,
+      PASSWORD: process.env.PASSWORD,
+    }
+    process.env.AI_EAT_DATA_DIR = path.join(root, 'recipes')
+    process.env.SESSION_SECRET = 'test-secret-for-auth-heal-0123456789'
+    delete process.env.PASSWORD
+    __resetLoginThrottle()
+  })
+
+  afterEach(async () => {
+    for (const [k, v] of Object.entries(prevEnv)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('建号时迁移失败留下的旧数据，最早的管理员再次登录会自动补齐', async () => {
+    // 建号（此时无旧数据，迁移 0 条并写完成标记）
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    const [u] = await listUsers()
+    // 清掉完成标记，模拟「建号时迁移失败、没来得及标记」
+    await fs.rm(path.join(root, 'users', u.id, '.legacy-adopted'), { force: true })
+    // 旧目录里还有菜谱（当时没搬成功）
+    await fs.mkdir(path.join(root, 'recipes'), { recursive: true })
+    await fs.writeFile(path.join(root, 'recipes', 'r-1.json'), '{"name":"旧菜"}', 'utf8')
+
+    expect((await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))).status).toBe(200)
+
+    expect(await fs.readdir(path.join(root, 'users', u.id, 'recipes'))).toEqual(['r-1.json'])
+    expect(await fs.readdir(path.join(root, 'recipes')).catch(() => [])).toEqual([])
+  })
+
+  it('迁移失败不阻塞登录（旧目录不可读时仍能登录）', async () => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return
+    await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    const [u] = await listUsers()
+    await fs.rm(path.join(root, 'users', u.id, '.legacy-adopted'), { force: true })
+    await fs.mkdir(path.join(root, 'recipes'), { recursive: true })
+    await fs.chmod(path.join(root, 'recipes'), 0o000)
+    const res = await POST(loginReq({ username: '爸爸', password: 'papa-1234' }))
+    expect(res.status).toBe(200)
+    await fs.chmod(path.join(root, 'recipes'), 0o755)
   })
 })

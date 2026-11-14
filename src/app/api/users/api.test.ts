@@ -174,4 +174,19 @@ describe('/api/users', () => {
     expect((await PATCH(json({ name: 'x' }, admin.cookie, 'PATCH'), ctxOf('u-deadbeef'))).status).toBe(404)
     expect((await DELETE(json({ confirm: 'x' }, admin.cookie, 'DELETE'), ctxOf('u-deadbeef'))).status).toBe(404)
   })
+
+  it('删除时数据目录删不掉 → 500 且账号保留（不制造数据黑户）', async () => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return // root 不受权限位限制
+    const admin = await enableMultiUser()
+    const bob = await makeSession('待删', 'member')
+    await fs.mkdir(path.join(root, 'users', bob.user.id, 'recipes'), { recursive: true })
+    // 让 users/ 不可写：rm(userDir) 会失败
+    await fs.chmod(path.join(root, 'users'), 0o500)
+    const res = await DELETE(json({ confirm: '待删' }, admin.cookie, 'DELETE'), ctxOf(bob.user.id))
+    expect(res.status).toBe(500)
+    expect(((await res.json()) as { error: string }).error).toContain('账号未删除')
+    await fs.chmod(path.join(root, 'users'), 0o755)
+    // 账号仍在，管理员可以重试；不会出现「账号没了、目录还在」
+    expect((await listUsers()).some(u => u.id === bob.user.id)).toBe(true)
+  })
 })

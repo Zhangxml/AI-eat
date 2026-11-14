@@ -105,6 +105,14 @@ describe('middleware（页面守卫）', () => {
     expect(isLoginRedirect(await middleware(nextReq('/recipes', cookie)))).toBe(true)
   })
 
+  it('仅置 disabled（不改 sessionVersion）也 → 303', async () => {
+    // 单独锁定 disabled 判定：上面的用例同时 bump 了 sessionVersion，会被版本判定兜住，
+    // 删掉 disabled 分支测试仍会通过（变异测试暴露的缺口）
+    const { user, cookie } = await makeUser()
+    await updateUser(user.id, { disabled: true })
+    expect(isLoginRedirect(await middleware(nextReq('/recipes', cookie)))).toBe(true)
+  })
+
   it('改密后旧 token → 303，新版本 token → 放行', async () => {
     const { user, cookie } = await makeUser()
     await updateUser(user.id, { sessionVersion: user.sessionVersion + 1 })

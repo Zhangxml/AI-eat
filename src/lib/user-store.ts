@@ -155,19 +155,47 @@ function newUserId(): string {
   return `u-${randomBytes(4).toString('hex')}`
 }
 
-// 写盘串行队列：createUser/updateUser/deleteUser 都是「读-改-写」，
-// 并发时后写会覆盖前写（实测并发建 8 个用户只落 4 个）。串行化后单实例内不丢更新。
-let writeChain: Promise<void> = Promise.resolve()
+// 写盘串行队列：createUser/updateUser/deleteUser 都是「读-改-写」。
+// **必须把读取也放进队列**：只串行化写文件的话，两个并发请求会读到同一份旧快照，
+// 后写者用旧快照整表覆盖先写者 —— 实测 6 个并发建号全部返回 201，但只有 4 个真正落盘，
+// 且「禁用/改密」被覆盖后账号仍可登录（安全动作假成功）。
+let writeChain: Promise<unknown> = Promise.resolve()
 
-async function writeAll(users: User[]): Promise<void> {
-  const payload: UsersFile = { version: USERS_VERSION, users }
-  const run = writeChain.catch(() => {}).then(async () => {
+interface UsersMutation<T> {
+  /** 变更后的完整用户表（会被原子写盘） */
+  next: User[]
+  /** 返回给调用方的结果 */
+  result: T
+}
+
+/**
+ * 在串行队列内执行「读 → 改 → 写」。
+ * 读取在队列内，保证看到的是上一个写者的结果，而不是过期的快照。
+ *
+ * 损坏（corrupt）时拒绝写：否则会用「过滤后的空表」整表覆盖，
+ * 把本可人工修复的 users.json 抹掉。missing（首次建号）允许写。
+ */
+async function mutateUsers<T>(mutate: (users: User[]) => UsersMutation<T>): Promise<T> {
+  const run = writeChain.catch(() => undefined).then(async () => {
+    const { state, users } = await readUsersFile()
+    if (state === 'corrupt') {
+      const err = new Error('用户表损坏：请从备份恢复 data/users.json 后重试') as Error & { code?: string }
+      err.code = 'USER_STORE_CORRUPT'
+      throw err
+    }
+    const { next, result } = mutate(users)
     // 每次写前确保 users/ 目录存在（同时作为「已初始化」标记）
     await fs.mkdir(path.join(dataRoot(), 'users'), { recursive: true })
+    const payload: UsersFile = { version: USERS_VERSION, users: next }
     await atomicWriteFile(usersFilePath(), JSON.stringify(payload, null, 2) + '\n')
+    return result
   })
-  writeChain = run
-  await run
+  // 队列自身不能因一次失败而中断（否则后续写入全部被拒绝）
+  writeChain = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
 }
 
 // 长度上限：防止超长名字/密码把 users.json 撑大（每个请求都要 parse 它）
@@ -182,29 +210,47 @@ export async function createUser(input: {
   name: string
   passwordHash: string
   role?: UserRole
+  /**
+   * 仅在用户表为空时创建（首次初始化专用）。
+   * 并发初始化时两个请求都能通过 `bootstrapRequired()`，若不设此约束会建出两个账号
+   * （一个 admin 一个 member），与「初始化」语义不符。
+   */
+  onlyIfEmpty?: boolean
 }): Promise<User> {
   const name = input.name.trim()
   if (name === '') throw new Error('用户名不能为空')
   if (name.length > MAX_NAME_LEN) throw new Error(`用户名最长 ${MAX_NAME_LEN} 个字符`)
   if (input.passwordHash === '') throw new Error('密码哈希不能为空')
 
-  const existing = await listUsers()
-  if (existing.some(u => u.name.trim().toLowerCase() === name.toLowerCase())) {
-    throw new Error(`用户名「${name}」已存在`)
-  }
-  const now = new Date().toISOString()
-  const user: User = {
-    id: newUserId(),
-    name,
-    role: input.role ?? (existing.length === 0 ? 'admin' : 'member'),
-    passwordHash: input.passwordHash,
-    sessionVersion: 1,
-    disabled: false,
-    createdAt: now,
-    updatedAt: now,
-  }
-  await writeAll([...existing, user])
-  return user
+  return mutateUsers(users => {
+    if (input.onlyIfEmpty && users.length > 0) {
+      // 带错误码：调用方按 code 分支，而不是靠文案前缀（改文案就会静默退化成 400）
+      const err = new Error('已初始化：请直接登录') as Error & { code?: string }
+      err.code = 'ALREADY_INITIALIZED'
+      throw err
+    }
+    // 唯一性判断必须在队列内：放到队列外会与并发建号互相看不见
+    if (users.some(u => u.name.trim().toLowerCase() === name.toLowerCase())) {
+      throw new Error(`用户名「${name}」已存在`)
+    }
+    const now = new Date().toISOString()
+    // id 由 4 字节随机数生成，碰撞概率极低但仍可能——在锁内检查，避免造出重复 id
+    const taken = new Set(users.map(u => u.id))
+    let id = newUserId()
+    while (taken.has(id)) id = newUserId()
+
+    const user: User = {
+      id,
+      name,
+      role: input.role ?? (users.length === 0 ? 'admin' : 'member'),
+      passwordHash: input.passwordHash,
+      sessionVersion: 1,
+      disabled: false,
+      createdAt: now,
+      updatedAt: now,
+    }
+    return { next: [...users, user], result: user }
+  })
 }
 
 /** 局部更新；不存在则抛错。updatedAt 自动刷新。 */
@@ -212,26 +258,28 @@ export async function updateUser(
   id: string,
   patch: Partial<Pick<User, 'name' | 'passwordHash' | 'role' | 'disabled' | 'sessionVersion'>>,
 ): Promise<User> {
-  const users = await listUsers()
-  const idx = users.findIndex(u => u.id === id)
-  if (idx === -1) throw new Error(`用户不存在：${id}`)
+  return mutateUsers(users => {
+    const idx = users.findIndex(u => u.id === id)
+    if (idx === -1) throw new Error(`用户不存在：${id}`)
 
-  // 改名需保持唯一
-  if (patch.name !== undefined) {
-    const name = patch.name.trim()
-    if (name === '') throw new Error('用户名不能为空')
-    if (name.length > MAX_NAME_LEN) throw new Error(`用户名最长 ${MAX_NAME_LEN} 个字符`)
-    const dup = users.some(
-      (u, i) => i !== idx && u.name.trim().toLowerCase() === name.toLowerCase(),
-    )
-    if (dup) throw new Error(`用户名「${name}」已存在`)
-    patch = { ...patch, name }
-  }
+    let effective = patch
+    // 改名需保持唯一（同样必须在队列内判断）
+    if (patch.name !== undefined) {
+      const name = patch.name.trim()
+      if (name === '') throw new Error('用户名不能为空')
+      if (name.length > MAX_NAME_LEN) throw new Error(`用户名最长 ${MAX_NAME_LEN} 个字符`)
+      const dup = users.some(
+        (u, i) => i !== idx && u.name.trim().toLowerCase() === name.toLowerCase(),
+      )
+      if (dup) throw new Error(`用户名「${name}」已存在`)
+      effective = { ...patch, name }
+    }
 
-  const next: User = { ...users[idx], ...patch, updatedAt: new Date().toISOString() }
-  users[idx] = next
-  await writeAll(users)
-  return next
+    const next: User = { ...users[idx], ...effective, updatedAt: new Date().toISOString() }
+    const nextUsers = [...users]
+    nextUsers[idx] = next
+    return { next: nextUsers, result: next }
+  })
 }
 
 /**
@@ -240,13 +288,14 @@ export async function updateUser(
  * 相当于把鉴权整个关掉。需要清空请直接维护 data/users.json。
  */
 export async function deleteUser(id: string): Promise<void> {
-  const users = await listUsers()
-  if (!users.some(u => u.id === id)) throw new Error(`用户不存在：${id}`)
-  const remaining = users.filter(u => u.id !== id)
-  if (remaining.length === 0) {
-    throw new Error('不能删除最后一个用户（会导致鉴权失效）')
-  }
-  await writeAll(remaining)
+  return mutateUsers(users => {
+    if (!users.some(u => u.id === id)) throw new Error(`用户不存在：${id}`)
+    const remaining = users.filter(u => u.id !== id)
+    if (remaining.length === 0) {
+      throw new Error('不能删除最后一个用户（会导致鉴权失效）')
+    }
+    return { next: remaining, result: undefined }
+  })
 }
 
 /** 当前表中的管理员数量（用于「不能删掉最后一个管理员」这类校验） */

@@ -99,7 +99,7 @@ export async function requireSession(
       ok: false,
       reason: 'user-store-broken',
       res: Response.json(
-        { error: '用户表损坏或为空：请从备份恢复 data/users.json 后重启' },
+        { error: '用户表损坏或为空：请从备份恢复 data/users.json 后重试' },
         { status: 503 },
       ),
     }
